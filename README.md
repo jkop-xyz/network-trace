@@ -1,5 +1,8 @@
 # network-trace
 
+> [!NOTE]
+> This project was written by an AI (Claude, via Claude Code), working from a design worked out together with a human. Expect rough edges, and check the results before relying on them.
+
 A desktop app for Linux and Windows that keeps tracing the route to a host, recording latency and packet loss at every hop over time. When something goes wrong, you can export the evidence as a Report (HTML or PDF) and a CSV to send to your ISP.
 
 See [GLOSSARY.md](GLOSSARY.md) for the terms used throughout (Session, Target, Hop, Sample, Gap, Time Window…).
