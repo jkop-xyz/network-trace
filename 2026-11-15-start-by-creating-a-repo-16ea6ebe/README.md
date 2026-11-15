@@ -39,4 +39,4 @@ Layout:
 - `src-tauri`: the desktop shell: commands, tray and printing.
 - `src`: the Svelte UI. `src/lib/chart.ts` draws graphs for both the screen and Reports, and `src/lib/report.ts` builds Reports from a list of sections.
 
-Pushing a `v*` tag builds the Linux AppImage and the Windows portable `.exe` and attaches them to a draft GitHub Release.
+Pushing a `v*` tag builds the Linux AppImage and the Windows portable `.exe` and attaches them to a GitHub Release (a pre-release for tags like `v0.1.0-beta.1`).
