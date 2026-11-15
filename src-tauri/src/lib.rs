@@ -17,13 +17,17 @@ pub const REPORT_SCHEME: &str = "ntreport";
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        // Must be first: a second launch focuses this instance (and starts any
-        // Targets it was given here) instead of running a second recorder.
-        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            show_main(app);
-            start_targets(app.clone(), targets_from(args.into_iter().skip(1)));
-        }))
+    let builder = tauri::Builder::default();
+    // Must be the first plugin: a second launch focuses this instance (and
+    // starts any Targets it was given here) instead of running a second
+    // recorder. Left out of debug builds, which would otherwise hand their
+    // arguments to an installed copy that is running at the same time.
+    #[cfg(not(debug_assertions))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+        show_main(app);
+        start_targets(app.clone(), targets_from(args.into_iter().skip(1)));
+    }));
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .register_uri_scheme_protocol(REPORT_SCHEME, |ctx, _request| {

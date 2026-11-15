@@ -6,7 +6,16 @@
   import { api, type SessionSummary, type SessionView } from "$lib/api";
   import { date, dateTime, duration, fileStem, interval, shortStamp, time } from "$lib/format";
   import { buildReportHtml, collectReport } from "$lib/report";
-  import { PRESETS, defaultWindow, resolveWindow, type ResolvedWindow, type TimeWindow } from "$lib/timeWindow";
+  import {
+    PRESETS,
+    defaultWindow,
+    forgetWindows,
+    rememberWindow,
+    rememberedWindow,
+    resolveWindow,
+    type ResolvedWindow,
+    type TimeWindow,
+  } from "$lib/timeWindow";
   import HopTable from "./HopTable.svelte";
   import Ip from "./Ip.svelte";
   import Timeline from "./Timeline.svelte";
@@ -20,8 +29,14 @@
 
   const INTERVALS = [1000, 2500, 5000, 10000, 15000, 30000, 60000];
 
+  // The Time Window chosen for this Session is remembered; until one is
+  // chosen, the default depends on whether the Session is running.
   // svelte-ignore state_referenced_locally
-  let tw: TimeWindow = $state(defaultWindow(summary.running));
+  let tw: TimeWindow = $state(rememberedWindow(summary.id) ?? defaultWindow(summary.running));
+  function setWindow(w: TimeWindow) {
+    tw = w;
+    rememberWindow(summary.id, w);
+  }
   let win = $state<ResolvedWindow | null>(null);
   let view = $state<SessionView | null>(null);
   let tick = $state(0);
@@ -104,9 +119,9 @@
   function choosePreset(id: string) {
     if (id === "custom") {
       const w = win ?? resolveWindow(tw, summary);
-      tw = { preset: "custom", from: w.from, to: w.to };
+      setWindow({ preset: "custom", from: w.from, to: w.to });
     } else {
-      tw = { preset: id as TimeWindow["preset"] };
+      setWindow({ preset: id as TimeWindow["preset"] });
     }
   }
 
@@ -114,7 +129,7 @@
   function setCustom(which: "from" | "to", value: string) {
     const ts = new Date(value).getTime();
     if (Number.isNaN(ts)) return;
-    tw = { ...tw, preset: "custom", [which]: ts };
+    setWindow({ ...tw, preset: "custom", [which]: ts });
   }
 
   async function toggleGraph(hop: number) {
@@ -153,6 +168,7 @@
     if (!ok) return;
     try {
       await api.sessionsDelete([summary.id]);
+      forgetWindows([summary.id]);
       onChanged();
     } catch (e) {
       message = String(e);
@@ -299,7 +315,7 @@
   {#if win}
     <p class="covers small muted">
       Exports cover: {win.label} ({shortStamp(win.from)} – {shortStamp(win.to)}).
-      {#if windowIsPartial}<button class="link" onclick={() => (tw = { preset: "full" })}>Choose Full Session</button> to include everything.{/if}
+      {#if windowIsPartial}<button class="link" onclick={() => setWindow({ preset: "full" })}>Choose Full Session</button> to include everything.{/if}
     </p>
   {/if}
 

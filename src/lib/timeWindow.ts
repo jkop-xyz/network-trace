@@ -34,6 +34,43 @@ interface SessionTimes {
   running: boolean;
 }
 
+const STORAGE_KEY = "timeWindows";
+
+function readAll(): Record<string, TimeWindow> {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}") ?? {};
+  } catch {
+    return {};
+  }
+}
+
+/** The Time Window last chosen for a Session, if any. Kept on this computer
+ * only; storage may be unavailable, in which case nothing is remembered. */
+export function rememberedWindow(sessionId: string): TimeWindow | null {
+  const w = readAll()[sessionId];
+  return w && PRESETS.some((p) => p.id === w.preset) ? w : null;
+}
+
+export function rememberWindow(sessionId: string, w: TimeWindow) {
+  try {
+    const all = readAll();
+    all[sessionId] = w;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
+  } catch {
+    /* not remembered */
+  }
+}
+
+export function forgetWindows(sessionIds: string[]) {
+  try {
+    const all = readAll();
+    for (const id of sessionIds) delete all[id];
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
+  } catch {
+    /* nothing to forget */
+  }
+}
+
 /** The default Time Window: recent activity for a running Session, everything for a stopped one. */
 export function defaultWindow(running: boolean): TimeWindow {
   return { preset: running ? "10m" : "full" };

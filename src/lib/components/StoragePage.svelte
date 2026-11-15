@@ -2,6 +2,7 @@
   import { ask } from "@tauri-apps/plugin-dialog";
   import { api, type SessionSummary } from "$lib/api";
   import { bytes, duration, shortStamp } from "$lib/format";
+  import { forgetWindows } from "$lib/timeWindow";
 
   interface Props {
     sessions: SessionSummary[];
@@ -28,6 +29,7 @@
     if (!(await ask(`Delete ${what}? This cannot be undone.`, { title: "Delete Sessions", kind: "warning" }))) return;
     try {
       await api.sessionsDelete(ids);
+      forgetWindows(ids);
       message = `Deleted ${ids.length} Session${ids.length === 1 ? "" : "s"}.`;
       selected = [];
     } catch (e) {
