@@ -347,11 +347,8 @@ fn public_ip() -> Result<String, String> {
 
 fn os_description() -> String {
     #[cfg(windows)]
-    {
-        // e.g. "Windows 11 Pro (10.0.22631, x86_64)": ISPs ask for the version.
-        let info = os_info::get();
-        let name = info.edition().map(str::to_string).unwrap_or_else(|| info.os_type().to_string());
-        return format!("{name} ({}, {})", info.version(), std::env::consts::ARCH);
+    if let Some(name) = windows_version() {
+        return name;
     }
     #[cfg(target_os = "linux")]
     if let Ok(release) = std::fs::read_to_string("/etc/os-release") {
@@ -360,6 +357,77 @@ fn os_description() -> String {
         }
     }
     format!("{} ({})", std::env::consts::OS, std::env::consts::ARCH)
+}
+
+/// The Windows product and version from the registry, e.g.
+/// "Windows 11 Pro 24H2 (build 26100.2314, x86_64)".
+#[cfg(windows)]
+fn windows_version() -> Option<String> {
+    use winreg::RegKey;
+    use winreg::enums::HKEY_LOCAL_MACHINE;
+    let key = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion").ok()?;
+    let text = |name: &str| key.get_value::<String, _>(name).ok();
+    let ubr = key.get_value::<u32, _>("UBR").ok();
+    Some(describe_windows(
+        &text("ProductName")?,
+        text("InstallationType").as_deref(),
+        text("CurrentBuild").as_deref(),
+        text("DisplayVersion").as_deref(),
+        ubr,
+    ))
+}
+
+/// Builds a readable Windows description from registry values.
+#[cfg_attr(not(windows), allow(dead_code))]
+///
+/// `ProductName` still says "Windows 10" on Windows 11, so desktop builds
+/// from 22000 on are renamed. Server editions share build numbers with
+/// Windows 11 but have the right `ProductName`, so they are left alone.
+fn describe_windows(
+    product: &str,
+    installation_type: Option<&str>,
+    build: Option<&str>,
+    display_version: Option<&str>,
+    ubr: Option<u32>,
+) -> String {
+    let build_no: u32 = build.and_then(|b| b.parse().ok()).unwrap_or(0);
+    let is_server = installation_type.is_some_and(|t| t.eq_ignore_ascii_case("server")) || product.contains("Server");
+    let mut name = product.trim().to_string();
+    if !is_server && build_no >= 22000 && name.starts_with("Windows 10") {
+        name = name.replacen("Windows 10", "Windows 11", 1);
+    }
+    if let Some(v) = display_version.filter(|v| !v.is_empty() && !is_server) {
+        name = format!("{name} {v}");
+    }
+    let build = match (build, ubr) {
+        (Some(b), Some(u)) => format!("build {b}.{u}"),
+        (Some(b), None) => format!("build {b}"),
+        _ => "unknown build".to_string(),
+    };
+    format!("{name} ({build}, {})", std::env::consts::ARCH)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::describe_windows;
+
+    #[test]
+    fn windows_11_is_not_called_windows_10() {
+        let s = describe_windows("Windows 10 Pro", Some("Client"), Some("26100"), Some("24H2"), Some(2314));
+        assert!(s.starts_with("Windows 11 Pro 24H2 (build 26100.2314, "), "{s}");
+    }
+
+    #[test]
+    fn windows_10_stays_windows_10() {
+        let s = describe_windows("Windows 10 Home", Some("Client"), Some("19045"), Some("22H2"), Some(5011));
+        assert!(s.starts_with("Windows 10 Home 22H2 (build 19045.5011, "), "{s}");
+    }
+
+    #[test]
+    fn server_keeps_its_name_despite_a_windows_11_build() {
+        let s = describe_windows("Windows Server 2025 Standard Evaluation", Some("Server"), Some("26100"), Some("24H2"), None);
+        assert!(s.starts_with("Windows Server 2025 Standard Evaluation (build 26100, "), "{s}");
+    }
 }
 
 /// Exports only ever write the file types the save dialog offers, which

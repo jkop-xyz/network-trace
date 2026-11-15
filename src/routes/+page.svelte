@@ -58,7 +58,16 @@
     };
   });
 
+  // In narrow windows the sidebar becomes a drawer behind a "Sessions" button.
+  let drawerOpen = $state(false);
+
+  function go(p: typeof page) {
+    page = p;
+    drawerOpen = false;
+  }
+
   function open(id: string, message?: string) {
+    drawerOpen = false;
     selectedId = id;
     page = "session";
     error = "";
@@ -67,19 +76,30 @@
   }
 </script>
 
-<div class="app">
-  <Sidebar
-    {sessions}
-    {selectedId}
-    {page}
-    onSelect={(id) => open(id)}
-    onStarted={(id, message) => open(id, message)}
-    onError={(m) => (error = m)}
-    onOverview={() => (page = "overview")}
-    onStorage={() => (page = "storage")}
-    onSettings={() => (page = "settings")}
-  />
+<div class="app" class:drawer-open={drawerOpen}>
+  <div class="sidebar-slot">
+    <Sidebar
+      {sessions}
+      {selectedId}
+      {page}
+      onSelect={(id) => open(id)}
+      onStarted={(id, message) => open(id, message)}
+      onError={(m) => {
+        error = m;
+        drawerOpen = false;
+      }}
+      onOverview={() => go("overview")}
+      onStorage={() => go("storage")}
+      onSettings={() => go("settings")}
+    />
+  </div>
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div class="scrim" onclick={() => (drawerOpen = false)}></div>
   <main>
+    <div class="topbar">
+      <button onclick={() => (drawerOpen = true)} aria-label="Show Sessions">☰ Sessions</button>
+      <span class="muted">{page === "session" ? (selected?.target ?? "") : page[0].toUpperCase() + page.slice(1)}</span>
+    </div>
     {#if error}
       <div class="banner error" role="alert">
         <div>
@@ -134,6 +154,52 @@
   }
   main > :global(*) {
     flex: none;
+  }
+  .sidebar-slot {
+    display: flex;
+    min-height: 0;
+  }
+  .sidebar-slot > :global(aside) {
+    flex: 1;
+  }
+  .topbar,
+  .scrim {
+    display: none;
+  }
+  @media (max-width: 820px) {
+    .app {
+      grid-template-columns: 1fr;
+    }
+    .sidebar-slot {
+      position: fixed;
+      inset: 0 auto 0 0;
+      width: min(300px, 85vw);
+      z-index: 40;
+      transform: translateX(-100%);
+      transition: transform 0.15s ease-out;
+      box-shadow: 0 0 24px rgb(0 0 0 / 0.35);
+    }
+    .drawer-open .sidebar-slot {
+      transform: none;
+    }
+    .drawer-open .scrim {
+      display: block;
+      position: fixed;
+      inset: 0;
+      z-index: 39;
+      background: rgb(0 0 0 / 0.3);
+    }
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 1rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--sidebar);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
   }
   .empty {
     max-width: 560px;

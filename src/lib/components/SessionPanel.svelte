@@ -396,6 +396,7 @@
   .actions {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 8px;
   }
   .error-banner {
@@ -420,10 +421,12 @@
     gap: 8px;
     margin: 4px 0 2px;
   }
-  .toolbar label {
+  .toolbar label,
+  .actions label {
     display: flex;
     align-items: center;
     gap: 6px;
+    white-space: nowrap;
   }
   .exports {
     display: flex;

@@ -30,6 +30,6 @@ trace-core = { version = "0.1.0", path = "../crates/trace-core" }
 tauri-plugin-single-instance = "2.5.5"
 
 [target."cfg(windows)".dependencies]
-os_info = { version = "3.15.0", default-features = false }
+winreg = "0.56.0"
 
 

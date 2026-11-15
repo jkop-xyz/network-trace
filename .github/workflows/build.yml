@@ -46,6 +46,12 @@ jobs:
       - name: Core tests
         run: cargo test -p trace-core
 
+      - name: App tests
+        shell: bash
+        run: |
+          npm run build
+          cargo test -p network-trace
+
       - name: Build AppImage
         if: runner.os == 'Linux'
         run: |
