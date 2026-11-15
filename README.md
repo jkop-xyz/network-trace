@@ -1,4 +1,12 @@
-# network-trace
+<p align="center">
+  <img src="docs/assets/banner.svg" alt="Network Trace: see where your connection breaks, and prove it to your ISP" width="100%">
+</p>
+
+<p align="center">
+  <a href="https://github.com/jkop-xyz/network-trace/releases"><b>Download</b></a> ·
+  <a href="#using-it">Using it</a> ·
+  <a href="#development">Development</a>
+</p>
 
 > [!NOTE]
 > This project was written by an AI (Claude, via Claude Code), working from a design worked out together with a human. Expect rough edges, and check the results before relying on them.

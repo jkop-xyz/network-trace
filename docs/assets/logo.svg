@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <title>Network Trace</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#16213a"/>
+      <stop offset="1" stop-color="#0b1020"/>
+    </linearGradient>
+    <linearGradient id="route" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#4f8cff"/>
+      <stop offset="1" stop-color="#62e0b8"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="url(#bg)"/>
+  <!-- the route: this machine, three Hops, the Target -->
+  <path d="M52 196 L96 150 L132 168 L170 104 L204 72" fill="none" stroke="url(#route)" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="52" cy="196" r="14" fill="#4f8cff"/>
+  <circle cx="96" cy="150" r="10" fill="#0b1020" stroke="#5a98ff" stroke-width="7"/>
+  <circle cx="132" cy="168" r="10" fill="#0b1020" stroke="#58b2e6" stroke-width="7"/>
+  <circle cx="170" cy="104" r="10" fill="#0b1020" stroke="#5cc9cf" stroke-width="7"/>
+  <!-- the Target, with probe pulses -->
+  <circle cx="204" cy="72" r="16" fill="#62e0b8"/>
+  <path d="M226 50 A31 31 0 0 1 226 94" fill="none" stroke="#62e0b8" stroke-width="6" stroke-linecap="round" opacity="0.55" transform="rotate(-45 204 72)"/>
+  <path d="M236 40 A45 45 0 0 1 236 104" fill="none" stroke="#62e0b8" stroke-width="6" stroke-linecap="round" opacity="0.25" transform="rotate(-45 204 72)"/>
+</svg>
