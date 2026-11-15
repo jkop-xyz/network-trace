@@ -87,7 +87,7 @@ Check each item and note pass/fail:
 12. Tray menu → "Quit": the app exits; reopening shows the Sessions as stopped.
 
 **Exports**
-13. **Export Report (PDF)**: a Report window and the print preview open. Save as PDF and open the PDF:
+13. **Export Report (PDF)**: a Report window and the print preview open. Closing the Report window must work, and the main window must keep updating meanwhile. Save as PDF and open the PDF:
     - The summary sentence, graphs, and red rows for carried loss are visible. Background colours must print; check the red table rows and the yellow/blue boxes.
     - **Headers/footers must not show a file path or the Windows user name.** A URL like `http://ntreport.localhost/report.html` is acceptable but worth noting.
     - The yellow "To save this Report as a PDF…" banner must *not* appear in the PDF.

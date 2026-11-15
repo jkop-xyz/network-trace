@@ -346,6 +346,13 @@ fn public_ip() -> Result<String, String> {
 }
 
 fn os_description() -> String {
+    #[cfg(windows)]
+    {
+        // e.g. "Windows 11 Pro (10.0.22631, x86_64)": ISPs ask for the version.
+        let info = os_info::get();
+        let name = info.edition().map(str::to_string).unwrap_or_else(|| info.os_type().to_string());
+        return format!("{name} ({}, {})", info.version(), std::env::consts::ARCH);
+    }
     #[cfg(target_os = "linux")]
     if let Ok(release) = std::fs::read_to_string("/etc/os-release") {
         if let Some(name) = release.lines().find_map(|l| l.strip_prefix("PRETTY_NAME=")) {
@@ -370,8 +377,11 @@ pub fn save_text(path: String, contents: String) -> CmdResult<()> {
 
 /// Opens a Report in its own window and shows the system print dialog,
 /// from which it can be saved as PDF.
+///
+/// Must stay `async`: a synchronous command that creates a window
+/// deadlocks on Windows (WebView2), freezing the app (issue #1).
 #[tauri::command]
-pub fn print_report(app: AppHandle, state: State<AppState>, html: String) -> CmdResult<()> {
+pub async fn print_report(app: AppHandle, state: State<'_, AppState>, html: String) -> CmdResult<()> {
     // Served from memory by the ntreport scheme, so printed headers/footers
     // show a neutral URL rather than a path containing the user name.
     *state.print_html.lock().unwrap() = html;
@@ -398,10 +408,31 @@ pub fn print_report(app: AppHandle, state: State<AppState>, html: String) -> Cmd
     Ok(())
 }
 
+/// Opens the file manager with the file selected.
 #[tauri::command]
 pub fn reveal_file(app: AppHandle, path: String) -> CmdResult<()> {
-    use tauri_plugin_opener::OpenerExt;
-    app.opener().reveal_item_in_dir(path).map_err(err)
+    #[cfg(windows)]
+    {
+        // The shell API the opener plugin uses falls back to opening the
+        // folder without a selection on some systems (issue #2); Explorer's
+        // own /select switch reliably selects the file.
+        use std::os::windows::process::CommandExt;
+        let _ = &app;
+        let path = std::path::Path::new(&path);
+        if !path.exists() {
+            return Err(format!("{} no longer exists", path.display()));
+        }
+        std::process::Command::new("explorer.exe")
+            .raw_arg(format!("/select,\"{}\"", path.display()))
+            .spawn()
+            .map(|_| ())
+            .map_err(err)
+    }
+    #[cfg(not(windows))]
+    {
+        use tauri_plugin_opener::OpenerExt;
+        app.opener().reveal_item_in_dir(path).map_err(err)
+    }
 }
 
 #[derive(Serialize, Default)]

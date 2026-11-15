@@ -24,18 +24,19 @@
   };
 </script>
 
+<div class="wrap">
 <table>
   <thead>
     <tr>
       <th class="num" title="Position along the route; click a number to graph that Hop">Hop</th>
       <th>Address <span class="muted small">(right-click for owner)</span></th>
-      <th class="num" title="Probes sent to this Hop in the Time Window">Sent</th>
+      <th class="num opt-2" title="Probes sent to this Hop in the Time Window">Sent</th>
       <th class="num" title="Share of Probes that got no reply">Loss %</th>
       <th class="num" title="Fastest round trip (ms)">Min</th>
       <th class="num" title="Average round trip (ms)">Avg</th>
       <th class="num" title="Slowest round trip (ms)">Max</th>
-      <th class="num" title="Average change in round trip between Samples (ms)">Jitter</th>
-      <th class="num" title="Round trip in the latest Sample (ms)">Cur</th>
+      <th class="num opt-2" title="Average change in round trip between Samples (ms)">Jitter</th>
+      <th class="num opt-1" title="Round trip in the latest Sample (ms)">Cur</th>
       <th class="bar-col">Latency <span class="muted small">0–{Math.round(scale)} ms</span></th>
     </tr>
   </thead>
@@ -65,15 +66,15 @@
           {/if}
           {#if h.address && names[h.address]}<div class="name muted small">{names[h.address]}</div>{/if}
         </td>
-        <td class="num">{h.sent}</td>
+        <td class="num opt-2">{h.sent}</td>
         <td class="num loss" title={lossTitle[kind]}>
           {#if kind === "no-reply"}<span class="muted">–</span>{:else}{pct(h.lossPct)}{/if}
         </td>
         <td class="num">{ms(h.minMs)}</td>
         <td class="num">{ms(h.avgMs)}</td>
         <td class="num">{ms(h.maxMs)}</td>
-        <td class="num">{ms(h.jitterMs)}</td>
-        <td class="num">{ms(h.curMs)}</td>
+        <td class="num opt-2">{ms(h.jitterMs)}</td>
+        <td class="num opt-1">{ms(h.curMs)}</td>
         <td class="bar-col">
           {#if h.minMs != null && h.maxMs != null && h.avgMs != null}
             <div class="bar" aria-hidden="true">
@@ -86,12 +87,33 @@
     {/each}
   </tbody>
 </table>
+</div>
 <p class="legend muted small">
   <span><span class="sw carried"></span>loss that continues to the Target</span>
   <span><span class="sw not-carried"></span>loss that doesn't continue (usually rate limiting)</span>
 </p>
 
 <style>
+  /* Less important columns give way as the table's space shrinks. */
+  .wrap {
+    container-type: inline-size;
+    overflow-x: auto;
+  }
+  @container (max-width: 860px) {
+    .bar-col {
+      display: none;
+    }
+  }
+  @container (max-width: 700px) {
+    .opt-1 {
+      display: none;
+    }
+  }
+  @container (max-width: 600px) {
+    .opt-2 {
+      display: none;
+    }
+  }
   table {
     width: 100%;
     border-collapse: collapse;

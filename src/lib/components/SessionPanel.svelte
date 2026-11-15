@@ -122,7 +122,9 @@
     graphed = adding ? [...graphed, hop].sort((a, b) => a - b) : graphed.filter((h) => h !== hop);
     if (adding) {
       await svelteTick();
-      document.getElementById(`hop-graph-${hop}`)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      // Wait for the graph to draw so the whole card, not just its top
+      // edge, is scrolled into view.
+      setTimeout(() => document.getElementById(`hop-graph-${hop}`)?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 400);
     }
   }
 
