@@ -1,6 +1,10 @@
 <script lang="ts">
   import { api, type SessionSummary } from "$lib/api";
   import { bytes, shortStamp } from "$lib/format";
+  import { appVersion } from "$lib/version";
+
+  let version = $state("");
+  appVersion().then((v) => (version = v));
 
   interface Props {
     sessions: SessionSummary[];
@@ -72,6 +76,7 @@
     <button class="link" class:active={page === "storage"} onclick={onStorage} title="Manage stored Sessions">Storage: {bytes(totalBytes)}</button>
     <button class="link" class:active={page === "settings"} onclick={onSettings}>Settings</button>
   </footer>
+  {#if version}<div class="version muted" title="Network Trace version">v{version}</div>{/if}
 </aside>
 
 <style>
@@ -172,6 +177,11 @@
   }
   .state.loss {
     color: var(--loss);
+  }
+  .version {
+    font-size: 0.75rem;
+    padding: 0 12px 6px;
+    margin-top: -4px;
   }
   footer {
     display: flex;

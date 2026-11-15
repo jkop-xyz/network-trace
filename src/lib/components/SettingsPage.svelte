@@ -2,6 +2,10 @@
   import { onMount } from "svelte";
   import { api, type Settings } from "$lib/api";
   import { interval } from "$lib/format";
+  import { appVersion } from "$lib/version";
+
+  let version = $state("");
+  appVersion().then((v) => (version = v));
 
   let { onBack }: { onBack: () => void } = $props();
 
@@ -42,6 +46,10 @@
       <span>Include my public IP address in Reports <span class="muted small">(looked up from api.ipify.org only when a Report is made)</span></span>
     </label>
     {#if saved}<p class="muted small">{saved}</p>{/if}
+    <p class="about muted small">
+      Network Trace {version ? `v${version}` : ""} ·
+      <a href="https://github.com/jkop-xyz/network-trace/releases" target="_blank" rel="noreferrer">Releases</a>
+    </p>
   {/if}
 </div>
 
@@ -67,6 +75,9 @@
     gap: 12px;
     padding: 10px 0;
     border-bottom: 1px solid var(--border);
+  }
+  .about {
+    margin-top: 24px;
   }
   label.check {
     justify-content: flex-start;

@@ -25,7 +25,13 @@ pub fn run() {
     #[cfg(not(debug_assertions))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
         show_main(app);
-        start_targets(app.clone(), targets_from(args.into_iter().skip(1)));
+        let targets = targets_from(args.into_iter().skip(1));
+        if targets.is_empty() {
+            // Most likely someone started a freshly downloaded version while
+            // this one runs in the tray; tell them which version this is.
+            let _ = app.emit("second-launch", app.package_info().version.to_string());
+        }
+        start_targets(app.clone(), targets);
     }));
     builder
         .plugin(tauri_plugin_opener::init())

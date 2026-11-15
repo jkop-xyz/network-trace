@@ -46,6 +46,9 @@
       listen("session-sample", refreshSoon),
       listen("session-stopped", refresh),
       listen("sessions-changed", refresh),
+      listen<string>("second-launch", (e) => {
+        notice = `Network Trace ${e.payload} is already running, so it was brought to the front instead of starting again. If you just downloaded a newer version, choose "Quit" in the tray menu first, then start the new one.`;
+      }),
     ];
     // No browser context menu (back/reload…) except where text is edited.
     const noMenu = (e: MouseEvent) => {
