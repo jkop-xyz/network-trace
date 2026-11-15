@@ -10,11 +10,13 @@ pub struct Settings {
     pub default_interval_ms: u32,
     /// Look up the public IP address when making a Report.
     pub public_ip_in_report: bool,
+    /// The "still running in the tray" notice has been shown once.
+    pub tray_notice_shown: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { timeout_ms: 3000, default_interval_ms: 2500, public_ip_in_report: true }
+        Settings { timeout_ms: 3000, default_interval_ms: 2500, public_ip_in_report: true, tray_notice_shown: false }
     }
 }
 

@@ -1,58 +1,74 @@
 <script lang="ts">
+  import type { Analysis } from "$lib/analysis";
   import type { HopStats } from "$lib/api";
   import { ms, pct } from "$lib/format";
+  import Ip from "./Ip.svelte";
 
   interface Props {
     hops: HopStats[];
     names: Record<string, string>;
+    analysis: Analysis;
     graphed: number[];
     onToggle: (hop: number) => void;
   }
-  let { hops, names, graphed, onToggle }: Props = $props();
+  let { hops, names, analysis, graphed, onToggle }: Props = $props();
 
   // Scale for the inline latency bars: the slowest max in view.
   const scale = $derived(Math.max(1, ...hops.map((h) => h.maxMs ?? 0)));
-  const finalHop = $derived(hops[hops.length - 1]?.hop);
+
+  const lossTitle = {
+    carried: "Loss that continues all the way to the Target",
+    "not-carried": "Loss that doesn't continue to later Hops: usually this router limiting how often it answers, not a fault",
+    "no-reply": "This router never answers probes, which is normal for some routers",
+    none: "",
+  };
 </script>
 
 <table>
   <thead>
     <tr>
-      <th class="num">Hop</th>
-      <th>Address</th>
-      <th>Name</th>
-      <th class="num">Sent</th>
-      <th class="num">Loss %</th>
-      <th class="num">Min</th>
-      <th class="num">Avg</th>
-      <th class="num">Max</th>
-      <th class="num">Jitter</th>
-      <th class="num">Cur</th>
-      <th class="bar-col">Latency (ms)</th>
+      <th class="num" title="Position along the route; click a number to graph that Hop">Hop</th>
+      <th>Address <span class="muted small">(right-click for owner)</span></th>
+      <th class="num" title="Probes sent to this Hop in the Time Window">Sent</th>
+      <th class="num" title="Share of Probes that got no reply">Loss %</th>
+      <th class="num" title="Fastest round trip (ms)">Min</th>
+      <th class="num" title="Average round trip (ms)">Avg</th>
+      <th class="num" title="Slowest round trip (ms)">Max</th>
+      <th class="num" title="Average change in round trip between Samples (ms)">Jitter</th>
+      <th class="num" title="Round trip in the latest Sample (ms)">Cur</th>
+      <th class="bar-col">Latency <span class="muted small">0–{Math.round(scale)} ms</span></th>
     </tr>
   </thead>
   <tbody>
     {#each hops as h (h.hop)}
-      <tr
-        class:lossy={h.lossPct >= 1}
-        class:graphed={graphed.includes(h.hop)}
-        onclick={() => h.hop !== finalHop && onToggle(h.hop)}
-        title={h.hop === finalHop ? "The Target, always graphed below" : "Click to show this Hop's graph"}
-      >
-        <td class="num">{h.hop}</td>
-        <td>
-          {h.address ?? "no reply"}
+      {@const kind = analysis.kinds.get(h.hop) ?? "none"}
+      {@const isTarget = h.hop === analysis.targetHop}
+      <tr class={kind} class:graphed={graphed.includes(h.hop)}>
+        <td class="num">
+          {#if isTarget}
+            <span class="hopnum" title="The Target, always graphed below">{h.hop}</span>
+          {:else}
+            <button class="hopnum" aria-pressed={graphed.includes(h.hop)} title="Show or hide this Hop's graph" onclick={() => onToggle(h.hop)}>{h.hop}</button>
+          {/if}
+        </td>
+        <td class="addr">
+          {#if h.address}
+            <Ip address={h.address} />
+          {:else}
+            <span class="muted" title={lossTitle["no-reply"]}>no reply</span>
+          {/if}
+          {#if isTarget}<span class="badge">Target</span>{/if}
           {#if h.addresses.length > 1}
-            <span
-              class="multi small"
-              title={"Answered at this Hop:\n" + h.addresses.map((a) => `${a.address} (${a.count}×)`).join("\n")}
+            <span class="multi small" title={"Answered at this Hop:\n" + h.addresses.map((a) => `${a.address} (${a.count}×)`).join("\n")}
               >+{h.addresses.length - 1}</span
             >
           {/if}
+          {#if h.address && names[h.address]}<div class="name muted small">{names[h.address]}</div>{/if}
         </td>
-        <td class="name muted">{h.address ? (names[h.address] ?? "") : ""}</td>
         <td class="num">{h.sent}</td>
-        <td class="num loss">{pct(h.lossPct)}</td>
+        <td class="num loss" title={lossTitle[kind]}>
+          {#if kind === "no-reply"}<span class="muted">–</span>{:else}{pct(h.lossPct)}{/if}
+        </td>
         <td class="num">{ms(h.minMs)}</td>
         <td class="num">{ms(h.avgMs)}</td>
         <td class="num">{ms(h.maxMs)}</td>
@@ -60,7 +76,7 @@
         <td class="num">{ms(h.curMs)}</td>
         <td class="bar-col">
           {#if h.minMs != null && h.maxMs != null && h.avgMs != null}
-            <div class="bar">
+            <div class="bar" aria-hidden="true">
               <span class="range" style:left="{(h.minMs / scale) * 100}%" style:width="{((h.maxMs - h.minMs) / scale) * 100}%"></span>
               <span class="avg" style:left="{(h.avgMs / scale) * 100}%"></span>
             </div>
@@ -70,6 +86,10 @@
     {/each}
   </tbody>
 </table>
+<p class="legend muted small">
+  <span><span class="sw carried"></span>loss that continues to the Target</span>
+  <span><span class="sw not-carried"></span>loss that doesn't continue (usually rate limiting)</span>
+</p>
 
 <style>
   table {
@@ -78,7 +98,7 @@
   }
   th,
   td {
-    padding: 5px 8px;
+    padding: 0.35rem 0.6rem;
     border-bottom: 1px solid var(--border);
     white-space: nowrap;
   }
@@ -86,28 +106,56 @@
     text-align: left;
     font-weight: 600;
     color: var(--muted);
-    font-size: 12px;
-  }
-  tbody tr {
-    cursor: pointer;
+    font-size: 0.9rem;
   }
   tbody tr:hover {
     background: var(--row-hover);
   }
-  tr.lossy td.loss {
-    color: var(--loss);
-    font-weight: 600;
-  }
-  tr.lossy {
+  tr.carried {
     background: var(--row-lossy);
+  }
+  tr.carried td.loss {
+    color: var(--loss);
+    font-weight: 700;
+  }
+  tr.not-carried td.loss {
+    color: var(--warn);
+  }
+  tr.no-reply td {
+    color: var(--muted);
   }
   tr.graphed {
     box-shadow: inset 3px 0 0 var(--accent);
   }
+  .hopnum {
+    display: inline-block;
+    min-width: 2em;
+    text-align: center;
+    padding: 1px 6px;
+  }
+  button.hopnum[aria-pressed="true"] {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-text);
+  }
+  .addr {
+    white-space: normal;
+    min-width: 12em;
+  }
   .name {
-    max-width: 280px;
     overflow: hidden;
     text-overflow: ellipsis;
+    max-width: 32em;
+  }
+  .badge {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    background: var(--row-selected);
+    color: var(--accent);
+    border-radius: 4px;
+    padding: 0 5px;
+    margin-left: 6px;
   }
   .multi {
     background: var(--row-selected);
@@ -139,5 +187,26 @@
     bottom: -2px;
     width: 2px;
     background: var(--chart-avg);
+  }
+  .legend {
+    margin: 6px 0 0;
+    display: flex;
+    gap: 6px 14px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .sw {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    margin-right: 5px;
+    vertical-align: -1px;
+  }
+  .sw.carried {
+    background: var(--loss);
+  }
+  .sw.not-carried {
+    background: var(--warn);
   }
 </style>

@@ -47,5 +47,8 @@ pub struct Sample {
     pub ts: Millis,
     /// The Sample interval in force when this Sample was sent.
     pub interval_ms: u32,
+    /// True when the last Hop is the Target's position (answered or not);
+    /// false while the route to the Target is unknown.
+    pub target_known: bool,
     pub hops: Vec<HopResult>,
 }

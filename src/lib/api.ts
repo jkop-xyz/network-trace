@@ -23,6 +23,8 @@ export interface SessionSummary extends SessionMeta {
   lastSample: Millis | null;
   running: boolean;
   status: SessionStatus;
+  /** Why the Session stopped on its own, if it failed. */
+  error: string | null;
 }
 
 export interface AddressSeen {
@@ -47,6 +49,27 @@ export interface HopStats {
   name: string | null;
 }
 
+/** The Target's own figures, from Samples where its position was known. */
+export interface TargetStats {
+  sent: number;
+  lost: number;
+  lossPct: number;
+  minMs: number | null;
+  avgMs: number | null;
+  maxMs: number | null;
+  jitterMs: number | null;
+  hop: number;
+}
+
+export interface IpOwner {
+  address: string;
+  network: string | null;
+  organisation: string | null;
+  country: string | null;
+  range: string | null;
+  source: string;
+}
+
 export interface Gap {
   start: Millis;
   end: Millis;
@@ -64,6 +87,7 @@ export interface SessionView {
   firstSample: Millis | null;
   lastSample: Millis | null;
   hops: HopStats[];
+  target: TargetStats | null;
   gaps: Gap[];
   routeChanges: RouteChange[];
   names: Record<string, string>;
@@ -112,4 +136,6 @@ export const api = {
   saveText: (path: string, contents: string) => invoke<void>("save_text", { path, contents }),
   printReport: (html: string) => invoke<void>("print_report", { html }),
   openDataDir: () => invoke<void>("open_data_dir"),
+  revealFile: (path: string) => invoke<void>("reveal_file", { path }),
+  ipOwner: (address: string) => invoke<IpOwner>("ip_owner", { address }),
 };

@@ -10,10 +10,13 @@ See [GLOSSARY.md](GLOSSARY.md) for the terms used throughout (Session, Target, H
 ## Using it
 
 - Type a hostname or IP address and press **Start**. Each Target gets its own Session, and several can run at once.
-- The hop table shows loss, latency and jitter per Hop for the chosen **Time Window**. Click a Hop to graph it.
-- **Export HTML / PDF** makes a Report for the current Time Window. For PDF, pick "Save as PDF" (Windows) or "Print to File" (Linux) in the print dialog.
+- The hop table shows loss, latency and jitter per Hop for the chosen **Time Window**. Loss that carries through to the Target is red; loss that doesn't (usually a router rate-limiting its replies) is amber. Click a Hop number to graph it.
+- Right-click any IP address to copy it or look up who owns it (public RDAP registry, only when you ask).
+- **Overview** shows several Sessions side by side in a 1×1 to 3×3 grid.
+- **Export Report (PDF) / HTML** makes a Report for the current Time Window. It opens with a plain-language summary of where loss starts. For PDF, pick "Save as PDF" (Windows) or "Print to File" (Linux) in the print dialog.
 - **Export CSV** writes one row per Probe: `timestamp,hop,address,rtt_ms,lost`.
-- Closing the window keeps Sessions running in the tray. Use **Quit** in the tray menu to stop them.
+- Closing the window keeps Sessions running in the tray. Use **Quit** in the tray menu to stop them. Starting the app again brings the running copy to the front.
+- Stopped Sessions can be deleted from their page or in bulk from **Storage**.
 - Targets given on the command line start straight away: `network-trace 1.1.1.1 192.168.1.1`.
 
 No admin rights are needed. On Linux this relies on unprivileged ICMP, which most distros allow. If yours doesn't, the app tells you, and this fixes it:

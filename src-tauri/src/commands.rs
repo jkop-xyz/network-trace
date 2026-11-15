@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::net::IpAddr;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use trace_core::model::{Millis, SessionId, SessionMeta};
-use trace_core::stats::{self, Bucket, Gap, HopStats, RouteChange, TimelineHop};
+use trace_core::stats::{self, Bucket, Gap, HopStats, RouteChange, TargetStats, TimelineHop};
 use trace_core::store::StoredSession;
 
 type CmdResult<T> = Result<T, String>;
@@ -40,14 +40,17 @@ pub struct SessionSummary {
     stored: StoredSession,
     running: bool,
     /// "stopped", "waiting" (no Samples yet), "ok" or "loss" (the Target
-    /// didn't answer in the latest Sample).
+    /// missed at least 2 of the last 3 Samples).
     status: &'static str,
+    /// Why the Session stopped on its own, if it failed this run.
+    error: Option<String>,
 }
 
 #[tauri::command]
 pub async fn sessions_list(state: State<'_, AppState>) -> CmdResult<Vec<SessionSummary>> {
     let store = state.store.clone();
     let running: HashSet<SessionId> = state.running.lock().unwrap().keys().cloned().collect();
+    let errors = state.errors.lock().unwrap().clone();
     blocking(move || {
         let mut out = Vec::new();
         for stored in store.list()? {
@@ -55,13 +58,19 @@ pub async fn sessions_list(state: State<'_, AppState>) -> CmdResult<Vec<SessionS
             let status = if !is_running {
                 "stopped"
             } else {
-                match store.session(&stored.meta.id)?.last_sample()? {
-                    None => "waiting",
-                    Some(s) if s.hops.last().is_some_and(|h| h.rtt_us.is_none()) => "loss",
-                    Some(_) => "ok",
+                let recent = store.session(&stored.meta.id)?.recent_samples(3)?;
+                let lost = recent
+                    .iter()
+                    .filter(|s| s.target_known && s.hops.last().is_some_and(|h| h.rtt_us.is_none()))
+                    .count();
+                match (recent.len(), lost) {
+                    (0, _) => "waiting",
+                    (_, n) if n >= 2 || (recent.len() == 1 && n == 1) => "loss",
+                    _ => "ok",
                 }
             };
-            out.push(SessionSummary { stored, running: is_running, status });
+            let error = errors.get(&stored.meta.id).cloned();
+            out.push(SessionSummary { stored, running: is_running, status, error });
         }
         Ok(out)
     })
@@ -80,8 +89,14 @@ async fn resolve(target: &str) -> CmdResult<IpAddr> {
     if let Ok(ip) = target.trim_matches(|c| c == '[' || c == ']').parse::<IpAddr>() {
         return Ok(ip);
     }
-    let mut addrs = tokio::net::lookup_host((target, 0)).await.map_err(|e| format!("Could not resolve {target}: {e}"))?;
-    addrs.next().map(|a| a.ip()).ok_or_else(|| format!("{target} has no addresses"))
+    let addrs: Vec<IpAddr> = tokio::net::lookup_host((target, 0))
+        .await
+        .map_err(|e| format!("Could not resolve {target}: {e}"))?
+        .map(|a| a.ip())
+        .collect();
+    // Prefer IPv4: a host with an AAAA record on a network with broken IPv6
+    // would otherwise look like 100% loss. Type an IPv6 address to force it.
+    addrs.iter().find(|a| a.is_ipv4()).or(addrs.first()).copied().ok_or_else(|| format!("{target} has no addresses"))
 }
 
 #[tauri::command]
@@ -168,6 +183,8 @@ pub struct SessionView {
     first_sample: Option<Millis>,
     last_sample: Option<Millis>,
     hops: Vec<HopRow>,
+    /// The Target's own figures; `None` if it never answered in the window.
+    target: Option<TargetStats>,
     gaps: Vec<Gap>,
     route_changes: Vec<RouteChange>,
     /// Reverse DNS names for every address mentioned above.
@@ -178,12 +195,13 @@ pub struct SessionView {
 pub async fn session_view(state: State<'_, AppState>, id: String, from: Millis, to: Millis) -> CmdResult<SessionView> {
     let store = state.store.clone();
     let vid = id.clone();
-    let (meta, range, hops, gaps, route_changes) = blocking(move || {
+    let (meta, range, hops, target, gaps, route_changes) = blocking(move || {
         let file = store.session(&vid)?;
         Ok((
             file.meta()?,
             file.sample_range()?,
             stats::hop_stats(&file, from, to)?,
+            stats::target_stats(&file, from, to)?,
             stats::gaps(&file, from, to)?,
             stats::route_changes(&file, from, to)?,
         ))
@@ -214,6 +232,7 @@ pub async fn session_view(state: State<'_, AppState>, id: String, from: Millis, 
         first_sample: range.0,
         last_sample: range.1,
         hops,
+        target,
         gaps,
         route_changes,
         names,
@@ -268,6 +287,7 @@ pub async fn session_timeline(
 
 #[tauri::command]
 pub async fn export_csv(state: State<'_, AppState>, id: String, from: Millis, to: Millis, path: String) -> CmdResult<u64> {
+    check_extension(&path, &["csv"])?;
     let store = state.store.clone();
     blocking(move || {
         let file = store.session(&id)?;
@@ -327,25 +347,37 @@ fn os_description() -> String {
     format!("{} ({})", std::env::consts::OS, std::env::consts::ARCH)
 }
 
+/// Exports only ever write the file types the save dialog offers, which
+/// limits what a compromised page could do with these commands.
+fn check_extension(path: &str, allowed: &[&str]) -> CmdResult<()> {
+    let ext = std::path::Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    if allowed.contains(&ext.as_str()) { Ok(()) } else { Err(format!("Can only save {} files", allowed.join("/"))) }
+}
+
 #[tauri::command]
 pub fn save_text(path: String, contents: String) -> CmdResult<()> {
+    check_extension(&path, &["html", "htm"])?;
     std::fs::write(&path, contents).map_err(|e| format!("Could not write {path}: {e}"))
 }
 
 /// Opens a Report in its own window and shows the system print dialog,
 /// from which it can be saved as PDF.
 #[tauri::command]
-pub fn print_report(app: AppHandle, html: String) -> CmdResult<()> {
-    let dir = app.path().app_cache_dir().map_err(err)?;
-    std::fs::create_dir_all(&dir).map_err(err)?;
-    let path = dir.join("report-print.html");
-    std::fs::write(&path, html).map_err(err)?;
-    let url = tauri::Url::from_file_path(&path).map_err(|_| "bad report path".to_string())?;
+pub fn print_report(app: AppHandle, state: State<AppState>, html: String) -> CmdResult<()> {
+    // Served from memory by the ntreport scheme, so printed headers/footers
+    // show a neutral URL rather than a path containing the user name.
+    *state.print_html.lock().unwrap() = html;
+    let url = if cfg!(windows) {
+        format!("http://{}.localhost/report.html", crate::REPORT_SCHEME)
+    } else {
+        format!("{}://localhost/report.html", crate::REPORT_SCHEME)
+    };
+    let url = tauri::Url::parse(&url).map_err(err)?;
 
     if let Some(old) = app.get_webview_window("report-print") {
         let _ = old.destroy();
     }
-    WebviewWindowBuilder::new(&app, "report-print", WebviewUrl::External(url))
+    WebviewWindowBuilder::new(&app, "report-print", WebviewUrl::CustomProtocol(url))
         .title("Report — print or save as PDF")
         .inner_size(900.0, 1000.0)
         .on_page_load(|window, payload| {
@@ -356,6 +388,104 @@ pub fn print_report(app: AppHandle, html: String) -> CmdResult<()> {
         .build()
         .map_err(err)?;
     Ok(())
+}
+
+#[tauri::command]
+pub fn reveal_file(app: AppHandle, path: String) -> CmdResult<()> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener().reveal_item_in_dir(path).map_err(err)
+}
+
+#[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct IpOwner {
+    address: String,
+    /// Network name from the registry, e.g. "CLOUDFLARENET".
+    network: Option<String>,
+    /// The organisation the block is registered to.
+    organisation: Option<String>,
+    country: Option<String>,
+    /// The registered address block, e.g. "1.1.1.0 – 1.1.1.255".
+    range: Option<String>,
+    /// Link to the full registry record.
+    source: String,
+}
+
+/// Who an address is registered to, from the public RDAP registries
+/// (rdap.org redirects to the right one: RIPE, ARIN, APNIC, ...). Only runs
+/// when the user asks for it.
+#[tauri::command]
+pub async fn ip_owner(address: String) -> CmdResult<IpOwner> {
+    let ip: IpAddr = address.parse().map_err(|_| "not an IP address".to_string())?;
+    if !is_public(ip) {
+        return Ok(IpOwner {
+            address,
+            network: Some("Private or special-use address".into()),
+            organisation: Some("Not registered publicly: part of a local network or reserved range".into()),
+            source: String::new(),
+            ..Default::default()
+        });
+    }
+    let url = format!("https://rdap.org/ip/{ip}");
+    let source = url.clone();
+    let json: serde_json::Value = tauri::async_runtime::spawn_blocking(move || -> Result<serde_json::Value, String> {
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .timeout_global(Some(std::time::Duration::from_secs(10)))
+            .build()
+            .into();
+        let mut resp = agent.get(&url).header("Accept", "application/rdap+json").call().map_err(err)?;
+        resp.body_mut().read_json().map_err(err)
+    })
+    .await
+    .map_err(err)??;
+
+    let s = |v: &serde_json::Value| v.as_str().map(str::to_string);
+    let range = match (s(&json["startAddress"]), s(&json["endAddress"])) {
+        (Some(a), Some(b)) => Some(format!("{a} – {b}")),
+        _ => None,
+    };
+    Ok(IpOwner {
+        address,
+        network: s(&json["name"]),
+        organisation: rdap_organisation(&json),
+        country: s(&json["country"]),
+        range,
+        source,
+    })
+}
+
+/// The organisation's name: an entity whose vCard kind is "org", then the
+/// registrant, then any named entity (registries differ in what they fill in).
+fn rdap_organisation(json: &serde_json::Value) -> Option<String> {
+    let entities = json["entities"].as_array()?;
+    let field = |e: &serde_json::Value, name: &str| -> Option<String> {
+        e["vcardArray"][1].as_array()?.iter().find(|f| f[0] == name).and_then(|f| f[3].as_str()).map(str::to_string)
+    };
+    let has_role = |e: &serde_json::Value, role: &str| e["roles"].as_array().is_some_and(|r| r.iter().any(|x| x == role));
+    entities
+        .iter()
+        .find(|e| field(e, "kind").as_deref() == Some("org"))
+        .and_then(|e| field(e, "fn"))
+        .or_else(|| entities.iter().find(|e| has_role(e, "registrant")).and_then(|e| field(e, "fn")))
+        .or_else(|| entities.iter().find_map(|e| field(e, "fn")))
+}
+
+fn is_public(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            !(v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_documentation()
+                || v4.is_broadcast()
+                || v4.octets()[0] == 100 && (64..128).contains(&v4.octets()[1])) // CGNAT
+        }
+        IpAddr::V6(v6) => {
+            let first = v6.segments()[0];
+            !(v6.is_loopback() || v6.is_unspecified() || (first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80)
+        }
+    }
 }
 
 #[tauri::command]

@@ -124,6 +124,58 @@ pub fn hop_stats(file: &SessionFile, from: Millis, to: Millis) -> Result<Vec<Hop
     Ok(out)
 }
 
+/// Figures for the Target itself: the last Hop of every Sample in which the
+/// Target's position was known. `None` if the Target never answered in the
+/// window, so the last recorded Hop was some router.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetStats {
+    pub sent: u32,
+    pub lost: u32,
+    pub loss_pct: f64,
+    pub min_ms: Option<f64>,
+    pub avg_ms: Option<f64>,
+    pub max_ms: Option<f64>,
+    pub jitter_ms: Option<f64>,
+    /// Hop number of the Target in the latest such Sample.
+    pub hop: u8,
+}
+
+pub fn target_stats(file: &SessionFile, from: Millis, to: Millis) -> Result<Option<TargetStats>> {
+    let conn = file.conn();
+    let mut stmt = conn.prepare_cached(
+        "WITH t AS (
+             SELECT s.ts AS ts, s.id AS sid, p.hop AS hop, p.rtt_us AS rtt
+             FROM samples s JOIN probes p ON p.sample_id = s.id
+             WHERE s.ts BETWEEN ?1 AND ?2 AND s.target_known = 1
+               AND p.hop = (SELECT MAX(q.hop) FROM probes q WHERE q.sample_id = s.id)),
+         j AS (SELECT rtt, LAG(rtt) OVER (ORDER BY ts, sid) AS prev FROM t)
+         SELECT COUNT(*), SUM(rtt IS NULL), MIN(rtt), AVG(rtt), MAX(rtt),
+                (SELECT AVG(ABS(rtt - prev)) FROM j WHERE rtt IS NOT NULL AND prev IS NOT NULL),
+                (SELECT hop FROM t ORDER BY ts DESC, sid DESC LIMIT 1)
+         FROM t",
+    )?;
+    let row = stmt.query_row(params![from, to], |r| {
+        let sent: u32 = r.get(0)?;
+        Ok((sent, r.get::<_, Option<u32>>(1)?, r.get::<_, Option<i64>>(2)?, r.get::<_, Option<f64>>(3)?, r.get::<_, Option<i64>>(4)?, r.get::<_, Option<f64>>(5)?, r.get::<_, Option<u8>>(6)?))
+    })?;
+    let (sent, lost, min, avg, max, jitter, hop) = row;
+    if sent == 0 {
+        return Ok(None);
+    }
+    let lost = lost.unwrap_or(0);
+    Ok(Some(TargetStats {
+        sent,
+        lost,
+        loss_pct: lost as f64 * 100.0 / sent as f64,
+        min_ms: ms(min.map(|v| v as f64)),
+        avg_ms: ms(avg),
+        max_ms: ms(max.map(|v| v as f64)),
+        jitter_ms: ms(jitter),
+        hop: hop.unwrap_or(0),
+    }))
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Bucket {
@@ -152,7 +204,9 @@ pub fn timeline(file: &SessionFile, hop: TimelineHop, from: Millis, to: Millis, 
     let buckets = buckets.max(1) as i64;
     let span = (to - from).max(1) + 1;
     let hop_filter = match hop {
-        TimelineHop::Final => "p.hop = (SELECT MAX(q.hop) FROM probes q WHERE q.sample_id = p.sample_id)".to_string(),
+        TimelineHop::Final => {
+            "s.target_known = 1 AND p.hop = (SELECT MAX(q.hop) FROM probes q WHERE q.sample_id = p.sample_id)".to_string()
+        }
         TimelineHop::Number(n) => format!("p.hop = {n}"),
     };
     let sql = format!(
@@ -211,7 +265,9 @@ pub fn gaps(file: &SessionFile, from: Millis, to: Millis) -> Result<Vec<Gap>> {
     let times = file.sample_times(from, to)?;
     Ok(times
         .windows(2)
-        .filter(|w| w[1].0 - w[0].0 > 3 * w[0].1 as i64 + 1000)
+        // Use the longer of the two intervals so changing the interval
+        // (say from 1 s to 60 s) doesn't look like a Gap.
+        .filter(|w| w[1].0 - w[0].0 > 3 * w[0].1.max(w[1].1) as i64 + 1000)
         .map(|w| Gap { start: w[0].0, end: w[1].0 })
         .collect())
 }
@@ -284,6 +340,7 @@ mod tests {
         Sample {
             ts,
             interval_ms: 1000,
+            target_known: true,
             hops: hops
                 .iter()
                 .enumerate()
@@ -338,6 +395,30 @@ mod tests {
         assert_eq!(b[3].avg_ms, Some(20.0));
         let b = timeline(&file, TimelineHop::Number(1), 0, 3999, 1).unwrap();
         assert_eq!(b[0].sent, 3);
+    }
+
+    #[test]
+    fn target_stats_skip_samples_where_the_target_was_unknown() {
+        let (_dir, file) = session(&[
+            sample(0, &[(a(1), Some(1000)), (a(9), Some(10_000))]),
+            sample(1000, &[(a(1), Some(1000)), (None, None)]),
+        ]);
+        let mut unknown = sample(2000, &[(a(1), Some(1000))]);
+        unknown.target_known = false;
+        let mut file = file;
+        file.append(&unknown).unwrap();
+        let t = target_stats(&file, 0, 5000).unwrap().unwrap();
+        assert_eq!((t.sent, t.lost, t.hop), (2, 1, 2));
+        assert_eq!(t.avg_ms, Some(10.0));
+        let b = timeline(&file, TimelineHop::Final, 0, 2999, 3).unwrap();
+        assert_eq!(b[2].sent, 0, "a Sample without a known Target isn't the Target");
+    }
+
+    #[test]
+    fn interval_increase_is_not_a_gap() {
+        let (_dir, mut file) = session(&[sample(0, &[]), sample(1000, &[])]);
+        file.append(&Sample { ts: 61_000, interval_ms: 60_000, target_known: true, hops: vec![] }).unwrap();
+        assert!(gaps(&file, 0, 100_000).unwrap().is_empty());
     }
 
     #[test]

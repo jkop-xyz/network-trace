@@ -8,24 +8,38 @@
     from: number;
     to: number;
     gaps: Gap[];
+    routeChanges?: number[];
     intervalMs: number;
+    /** Fixed graph height; by default it grows with the width. */
+    height?: number;
     /** Changes whenever the data should be re-read (new Samples). */
     tick: number;
   }
-  let { sessionId, hop, from, to, gaps, intervalMs, tick }: Props = $props();
+  let { sessionId, hop, from, to, gaps, routeChanges = [], intervalMs, height, tick }: Props = $props();
 
   let width = $state(0);
   let svg = $state("");
 
   $effect(() => {
     const w = width;
-    const args = [sessionId, hop, from, to, gaps, tick] as const;
+    const args = { sessionId, hop, from, to, gaps, routeChanges, intervalMs, height };
+    void tick;
     if (w < 50) return;
     let cancelled = false;
+    const rootFont = parseFloat(getComputedStyle(document.documentElement).fontSize) || 13;
     api
-      .sessionTimeline(args[0], args[1], args[2], args[3], bucketsFor(w, args[3] - args[2], intervalMs))
+      .sessionTimeline(args.sessionId, args.hop, args.from, args.to, bucketsFor(w, args.to - args.from, args.intervalMs))
       .then((buckets) => {
-        if (!cancelled) svg = timelineSvg(buckets, { width: w, from: args[2], to: args[3], gaps: args[4] });
+        if (cancelled) return;
+        svg = timelineSvg(buckets, {
+          width: w,
+          height: args.height ?? Math.round(Math.min(340, Math.max(140, w * 0.14))),
+          from: args.from,
+          to: args.to,
+          gaps: args.gaps,
+          routeChanges: args.routeChanges,
+          fontSize: Math.round(rootFont * 0.8),
+        });
       })
       .catch(() => {});
     return () => {
@@ -39,6 +53,6 @@
 <style>
   .timeline {
     width: 100%;
-    min-height: 206px;
+    min-height: 120px;
   }
 </style>

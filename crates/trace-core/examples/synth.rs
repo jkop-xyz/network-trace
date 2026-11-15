@@ -61,7 +61,7 @@ fn main() -> anyhow::Result<()> {
                     }
                 })
                 .collect();
-            file.append(&Sample { ts: t, interval_ms: 2500, hops })?;
+            file.append(&Sample { ts: t, interval_ms: 2500, target_known: true, hops })?;
             sample_id += 1;
             if sample_id % tx_batch == 0 {
                 eprint!(".");

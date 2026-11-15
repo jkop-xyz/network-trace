@@ -93,7 +93,7 @@
 <style>
   .page {
     padding: 16px 20px;
-    max-width: 900px;
+    max-width: 1100px;
   }
   header {
     display: flex;
@@ -101,7 +101,7 @@
     gap: 12px;
   }
   h1 {
-    font-size: 20px;
+    font-size: 1.55rem;
     margin: 0;
   }
   .tools {
@@ -127,7 +127,7 @@
   th {
     color: var(--muted);
     font-weight: 600;
-    font-size: 12px;
+    font-size: 0.9rem;
   }
   .link {
     border: 0;

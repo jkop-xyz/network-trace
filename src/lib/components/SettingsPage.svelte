@@ -57,7 +57,7 @@
     margin-bottom: 16px;
   }
   h1 {
-    font-size: 20px;
+    font-size: 1.55rem;
     margin: 0;
   }
   label {

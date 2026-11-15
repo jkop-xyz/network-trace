@@ -50,6 +50,7 @@ export function ms(v: number | null | undefined): string {
 export function pct(v: number | null | undefined): string {
   if (v == null) return "–";
   if (v === 0) return "0";
+  if (v < 0.1) return "<0.1";
   return v < 10 ? v.toFixed(1) : Math.round(v).toString();
 }
 

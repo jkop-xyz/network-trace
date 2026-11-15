@@ -24,9 +24,10 @@ CREATE TABLE IF NOT EXISTS meta (
     note        TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS samples (
-    id          INTEGER PRIMARY KEY,
-    ts          INTEGER NOT NULL,
-    interval_ms INTEGER NOT NULL
+    id           INTEGER PRIMARY KEY,
+    ts           INTEGER NOT NULL,
+    interval_ms  INTEGER NOT NULL,
+    target_known INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS samples_ts ON samples(ts);
 CREATE TABLE IF NOT EXISTS probes (
@@ -70,6 +71,15 @@ impl Store {
         self.dir.join(format!("{id}.sqlite"))
     }
 
+    /// Session ids are `<millis>-<8 hex>`; anything else (e.g. `../x`) is
+    /// rejected before it can touch the filesystem.
+    fn check_id(id: &str) -> Result<()> {
+        let ok = id.split_once('-').is_some_and(|(ms, hex)| {
+            !ms.is_empty() && ms.bytes().all(|b| b.is_ascii_digit()) && hex.len() == 8 && hex.bytes().all(|b| b.is_ascii_hexdigit())
+        });
+        if ok { Ok(()) } else { Err(anyhow!("invalid session id")) }
+    }
+
     /// Creates a new Session file and returns a writer for it.
     pub fn create(&self, target: &str, address: IpAddr, interval_ms: u32, timeout_ms: u32) -> Result<SessionFile> {
         self.create_at(now_ms(), target, address, interval_ms, timeout_ms)
@@ -96,12 +106,14 @@ impl Store {
 
     /// Opens an existing Session file for reading or writing.
     pub fn session(&self, id: &str) -> Result<SessionFile> {
+        Self::check_id(id)?;
         let path = self.path(id);
         if !path.exists() {
             return Err(anyhow!("no session {id}"));
         }
         let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        migrate(&conn)?;
         Ok(SessionFile { conn, id: id.to_string() })
     }
 
@@ -125,6 +137,9 @@ impl Store {
 
     /// Bytes on disk for one Session, including SQLite's side files.
     pub fn size(&self, id: &str) -> u64 {
+        if Self::check_id(id).is_err() {
+            return 0;
+        }
         ["", "-wal", "-shm"]
             .iter()
             .filter_map(|suffix| std::fs::metadata(self.dir.join(format!("{id}.sqlite{suffix}"))).ok())
@@ -133,6 +148,7 @@ impl Store {
     }
 
     pub fn delete(&self, id: &str) -> Result<()> {
+        Self::check_id(id)?;
         for suffix in ["", "-wal", "-shm"] {
             let p = self.dir.join(format!("{id}.sqlite{suffix}"));
             if p.exists() {
@@ -147,12 +163,26 @@ impl Store {
     pub fn recover(&self, running: &[SessionId]) -> Result<()> {
         for s in self.list()? {
             if s.meta.stopped_at.is_none() && !running.contains(&s.meta.id) {
-                let file = self.session(&s.meta.id)?;
-                file.stop_at(s.last_sample.unwrap_or(s.meta.started_at))?;
+                // One unreadable file must not block recovering the others.
+                let result = self.session(&s.meta.id).and_then(|f| f.stop_at(s.last_sample.unwrap_or(s.meta.started_at)));
+                if let Err(e) = result {
+                    eprintln!("could not recover session {}: {e:#}", s.meta.id);
+                }
             }
         }
         Ok(())
     }
+}
+
+/// Brings Session files written by older versions up to date.
+fn migrate(conn: &Connection) -> Result<()> {
+    let has_target_known: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('samples') WHERE name = 'target_known'")?
+        .exists([])?;
+    if !has_target_known {
+        conn.execute_batch("ALTER TABLE samples ADD COLUMN target_known INTEGER NOT NULL DEFAULT 1")?;
+    }
+    Ok(())
 }
 
 fn new_id(started_at: Millis) -> SessionId {
@@ -205,7 +235,10 @@ impl SessionFile {
 
     pub fn append(&mut self, sample: &Sample) -> Result<()> {
         let tx = self.conn.transaction()?;
-        tx.execute("INSERT INTO samples (ts, interval_ms) VALUES (?1, ?2)", params![sample.ts, sample.interval_ms])?;
+        tx.execute(
+            "INSERT INTO samples (ts, interval_ms, target_known) VALUES (?1, ?2, ?3)",
+            params![sample.ts, sample.interval_ms, sample.target_known],
+        )?;
         let sample_id = tx.last_insert_rowid();
         {
             let mut stmt = tx.prepare_cached("INSERT INTO probes (sample_id, hop, address, rtt_us) VALUES (?1, ?2, ?3, ?4)")?;
@@ -240,7 +273,7 @@ impl SessionFile {
     /// Samples with `from <= ts <= to`, oldest first, hops in order.
     pub fn samples(&self, from: Millis, to: Millis) -> Result<Vec<Sample>> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT s.id, s.ts, s.interval_ms, p.hop, p.address, p.rtt_us
+            "SELECT s.id, s.ts, s.interval_ms, s.target_known, p.hop, p.address, p.rtt_us
              FROM samples s JOIN probes p ON p.sample_id = s.id
              WHERE s.ts BETWEEN ?1 AND ?2 ORDER BY s.ts, s.id, p.hop",
         )?;
@@ -250,14 +283,14 @@ impl SessionFile {
         while let Some(r) = rows.next()? {
             let id: i64 = r.get(0)?;
             if last_id != Some(id) {
-                out.push(Sample { ts: r.get(1)?, interval_ms: r.get(2)?, hops: Vec::new() });
+                out.push(Sample { ts: r.get(1)?, interval_ms: r.get(2)?, target_known: r.get(3)?, hops: Vec::new() });
                 last_id = Some(id);
             }
-            let address: Option<String> = r.get(4)?;
+            let address: Option<String> = r.get(5)?;
             out.last_mut().unwrap().hops.push(HopResult {
-                hop: r.get(3)?,
+                hop: r.get(4)?,
                 address: address.and_then(|a| a.parse().ok()),
-                rtt_us: r.get(5)?,
+                rtt_us: r.get(6)?,
             });
         }
         Ok(out)
@@ -268,6 +301,25 @@ impl SessionFile {
         let mut stmt = self.conn.prepare_cached("SELECT ts, interval_ms FROM samples WHERE ts BETWEEN ?1 AND ?2 ORDER BY ts")?;
         let rows = stmt.query_map(params![from, to], |r| Ok((r.get(0)?, r.get(1)?)))?;
         Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Makes every later write fail, to test error handling.
+    #[doc(hidden)]
+    pub fn break_for_tests(&self) {
+        self.conn.execute_batch("CREATE TRIGGER fail BEFORE INSERT ON samples BEGIN SELECT RAISE(FAIL, 'broken for tests'); END;").unwrap();
+    }
+
+    /// The latest `n` Samples, newest first.
+    pub fn recent_samples(&self, n: u32) -> Result<Vec<Sample>> {
+        let since: Option<Millis> = self
+            .conn
+            .query_row("SELECT ts FROM samples ORDER BY ts DESC LIMIT 1 OFFSET ?1", params![n.saturating_sub(1)], |r| r.get(0))
+            .optional()?;
+        let Some(since) = since.or(self.sample_range()?.0) else { return Ok(Vec::new()) };
+        let mut samples = self.samples(since, Millis::MAX)?;
+        samples.reverse();
+        samples.truncate(n as usize);
+        Ok(samples)
     }
 
     pub fn last_sample(&self) -> Result<Option<Sample>> {
@@ -287,6 +339,7 @@ mod tests {
         Sample {
             ts,
             interval_ms: 2500,
+            target_known: true,
             hops: rtts
                 .iter()
                 .enumerate()
@@ -347,5 +400,30 @@ mod tests {
         store.delete(&id).unwrap();
         assert_eq!(store.size(&id), 0);
         assert!(store.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn rejects_ids_that_could_escape_the_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("sessions")).unwrap();
+        std::fs::write(dir.path().join("victim.sqlite"), b"x").unwrap();
+        assert!(store.delete("../victim").is_err());
+        assert!(store.session("../victim").is_err());
+        assert!(dir.path().join("victim.sqlite").exists());
+    }
+
+    #[test]
+    fn old_files_get_the_target_known_column() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let file = store.create("a", "1.1.1.1".parse().unwrap(), 2500, 3000).unwrap();
+        let id = file.id().to_string();
+        // Simulate a file from v0.1.0-beta.1, before the column existed.
+        file.conn().execute_batch("DROP TABLE samples; CREATE TABLE samples (id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, interval_ms INTEGER NOT NULL); INSERT INTO samples (ts, interval_ms) VALUES (5, 2500);").unwrap();
+        drop(file);
+        let file = store.session(&id).unwrap();
+        assert_eq!(file.sample_times(0, 10).unwrap(), vec![(5, 2500)]);
+        let known: bool = file.conn().query_row("SELECT target_known FROM samples", [], |r| r.get(0)).unwrap();
+        assert!(known);
     }
 }

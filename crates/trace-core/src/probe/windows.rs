@@ -21,6 +21,8 @@ const IP_DEST_PROT_UNREACHABLE: u32 = 11004;
 const IP_DEST_PORT_UNREACHABLE: u32 = 11005;
 const IP_REQ_TIMED_OUT: u32 = 11010;
 const IP_TTL_EXPIRED_TRANSIT: u32 = 11013; // also IP_HOP_LIMIT_EXCEEDED for IPv6
+const IP_TTL_EXPIRED_REASSEM: u32 = 11014;
+const IP_TIME_EXCEEDED: u32 = 11041;
 const IP_DEST_UNREACHABLE: u32 = 11040;
 
 #[repr(C)]
@@ -191,7 +193,9 @@ fn open(handle: Handle) -> io::Result<IcmpHandle> {
 fn classify(status: u32, from: IpAddr, rtt: Duration) -> io::Result<ProbeOutcome> {
     Ok(match status {
         IP_SUCCESS => ProbeOutcome::Echo { from, rtt },
-        IP_TTL_EXPIRED_TRANSIT => ProbeOutcome::TimeExceeded { from, rtt },
+        IP_TTL_EXPIRED_TRANSIT | IP_TTL_EXPIRED_REASSEM | IP_TIME_EXCEEDED if !from.is_unspecified() => {
+            ProbeOutcome::TimeExceeded { from, rtt }
+        }
         IP_DEST_NET_UNREACHABLE
         | IP_DEST_HOST_UNREACHABLE
         | IP_DEST_PROT_UNREACHABLE

@@ -59,6 +59,7 @@ mod tests {
         file.append(&Sample {
             ts: 1_700_000_000_000,
             interval_ms: 1000,
+            target_known: true,
             hops: vec![
                 HopResult { hop: 1, address: Some("10.0.0.1".parse().unwrap()), rtt_us: Some(1234) },
                 HopResult { hop: 2, address: None, rtt_us: None },

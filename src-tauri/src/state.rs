@@ -20,16 +20,22 @@ pub struct AppState {
     pub app: AppHandle,
     pub store: Store,
     pub running: Mutex<HashMap<SessionId, Running>>,
+    /// Why a Session stopped on its own, for Sessions that failed this run.
+    pub errors: Mutex<HashMap<SessionId, String>>,
     pub settings: Mutex<Settings>,
     pub settings_path: PathBuf,
     /// Reverse DNS names of Hop addresses; `None` = looked up, no name.
     pub names: Mutex<HashMap<IpAddr, Option<String>>>,
+    /// The Report being printed, served to the print window by the
+    /// `ntreport` URI scheme so no file path ends up in printed footers.
+    pub print_html: Mutex<String>,
 }
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionEvent {
     pub session_id: SessionId,
+    pub error: Option<String>,
 }
 
 impl AppState {
@@ -37,16 +43,20 @@ impl AppState {
         let data = app.path().app_data_dir().context("no app data directory")?;
         let config = app.path().app_config_dir().context("no app config directory")?;
         let store = Store::open(data.join("sessions"))?;
-        // Nothing runs yet, so any Session still marked running was cut short.
+        // Nothing runs yet (the single-instance plugin guarantees no other
+        // copy of the app is recording), so any Session still marked
+        // running was cut short.
         store.recover(&[])?;
         let settings_path = config.join("settings.json");
         Ok(AppState {
             app: app.clone(),
             store,
             running: Mutex::new(HashMap::new()),
+            errors: Mutex::new(HashMap::new()),
             settings: Mutex::new(Settings::load(&settings_path)),
             settings_path,
             names: Mutex::new(HashMap::new()),
+            print_html: Mutex::new(String::new()),
         })
     }
 
@@ -71,7 +81,7 @@ impl AppState {
             SessionConfig { target: address, interval_ms, timeout: std::time::Duration::from_millis(timeout_ms as u64) },
             engine::icmp_prober(),
             move |_| {
-                let _ = app.emit("session-sample", SessionEvent { session_id: sample_id.clone() });
+                let _ = app.emit("session-sample", SessionEvent { session_id: sample_id.clone(), error: None });
             },
         );
         let (done_tx, done_rx) = tokio::sync::watch::channel(false);
@@ -79,6 +89,7 @@ impl AppState {
             id.clone(),
             Running { control, target: target.to_string(), address, done: done_rx },
         );
+        self.update_tray();
 
         let app = self.app.clone();
         let finished_id = id.clone();
@@ -86,11 +97,18 @@ impl AppState {
             let result = handle.await;
             let state = app.state::<AppState>();
             state.running.lock().unwrap().remove(&finished_id);
-            if let Ok(Err(err)) | Err(err) = result.map_err(anyhow::Error::from) {
-                eprintln!("session {finished_id} ended with error: {err:#}");
+            let error = match result {
+                Ok(Ok(())) => None,
+                Ok(Err(e)) => Some(format!("{e:#}")),
+                Err(e) => Some(format!("stopped unexpectedly: {e}")),
+            };
+            if let Some(e) = &error {
+                eprintln!("session {finished_id} ended with error: {e}");
+                state.errors.lock().unwrap().insert(finished_id.clone(), e.clone());
             }
+            state.update_tray();
             let _ = done_tx.send(true);
-            let _ = app.emit("session-stopped", SessionEvent { session_id: finished_id });
+            let _ = app.emit("session-stopped", SessionEvent { session_id: finished_id, error });
         });
         Ok(id)
     }
@@ -115,6 +133,19 @@ impl AppState {
         let ids: Vec<SessionId> = self.running.lock().unwrap().keys().cloned().collect();
         for id in ids {
             self.stop(&id).await;
+        }
+    }
+
+    /// Shows how many Sessions are running in the tray tooltip.
+    pub fn update_tray(&self) {
+        let n = self.running.lock().unwrap().len();
+        if let Some(tray) = self.app.tray_by_id("main") {
+            let tip = match n {
+                0 => "Network Trace: no Sessions running".to_string(),
+                1 => "Network Trace: 1 Session running".to_string(),
+                n => format!("Network Trace: {n} Sessions running"),
+            };
+            let _ = tray.set_tooltip(Some(tip));
         }
     }
 }
