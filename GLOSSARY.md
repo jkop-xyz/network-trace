@@ -11,7 +11,7 @@ A host (hostname or IP address) whose route is being monitored.
 _Avoid_: Destination, endpoint, host
 
 **Session**:
-One continuous period of monitoring a single Target, from start to stop. It is the unit that is saved, reopened and exported, and several Sessions can run at the same time.
+The monitoring of a single Target, kept as one entry. It can be stopped and resumed; it is the unit that is saved, reopened and exported, and several Sessions can run at the same time.
 _Avoid_: Run, trace, job
 
 **Hop**:
@@ -35,7 +35,7 @@ One round of Probes sent to every Hop at a single moment.
 _Avoid_: Round, iteration, tick
 
 **Gap**:
-A stretch of a Session with no Samples because nothing was being sent, for example while the machine slept. A Gap is not loss.
+A stretch of a Session with no Samples because nothing was being sent, for example while the machine slept or the Session was stopped. A Gap is not loss.
 _Avoid_: Outage, downtime
 
 **Time Window**:

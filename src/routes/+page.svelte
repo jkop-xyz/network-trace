@@ -106,7 +106,7 @@
       <SettingsPage onBack={() => (page = "session")} />
     {:else if selected}
       {#key selected.id}
-        <SessionPanel summary={selected} onChanged={refresh} onOpen={(id) => open(id)} />
+        <SessionPanel summary={selected} onChanged={refresh} onOpen={(id, message) => open(id, message)} />
       {/key}
     {:else}
       <div class="empty">

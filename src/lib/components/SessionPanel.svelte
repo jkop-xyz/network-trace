@@ -14,7 +14,7 @@
   interface Props {
     summary: SessionSummary;
     onChanged: () => void;
-    onOpen: (id: string) => void;
+    onOpen: (id: string, message?: string) => void;
   }
   let { summary, onChanged, onOpen }: Props = $props();
 
@@ -133,10 +133,11 @@
     onChanged();
   }
 
-  async function startAgain() {
+  async function resume() {
     try {
-      const res = await api.sessionRestart(summary.id);
-      onOpen(res.id);
+      const res = await api.sessionResume(summary.id);
+      if (res.id === summary.id) onChanged();
+      else onOpen(res.id, `${summary.target} is already being monitored in another Session: showing that one.`);
     } catch (e) {
       message = String(e);
     }
@@ -250,7 +251,7 @@
         <button onclick={stop} disabled={!!busy}>Stop</button>
       {:else}
         <span class="muted">Stopped</span>
-        <button onclick={startAgain}>Start again</button>
+        <button onclick={resume} title="Continue monitoring in this Session; the stopped time shows as a gap">Resume</button>
         <button class="danger" onclick={remove} title="Delete this Session and its data">Delete</button>
       {/if}
     </div>

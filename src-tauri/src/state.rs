@@ -70,9 +70,25 @@ impl AppState {
             .map(|(id, _)| id.clone())
     }
 
+    /// Starts a new Session.
     pub fn start(&self, target: &str, address: IpAddr, interval_ms: u32) -> Result<SessionId> {
         let timeout_ms = self.settings.lock().unwrap().timeout_ms;
         let file = self.store.create(target, address, interval_ms, timeout_ms)?;
+        self.run(file, target, address, interval_ms, timeout_ms)
+    }
+
+    /// Continues a stopped Session in the same entry; the time it was
+    /// stopped shows up as a Gap.
+    pub fn resume(&self, id: &str) -> Result<SessionId> {
+        let timeout_ms = self.settings.lock().unwrap().timeout_ms;
+        let file = self.store.session(id)?;
+        let meta = file.meta()?;
+        file.resume(timeout_ms)?;
+        self.errors.lock().unwrap().remove(id);
+        self.run(file, &meta.target, meta.address, meta.interval_ms, timeout_ms)
+    }
+
+    fn run(&self, file: trace_core::store::SessionFile, target: &str, address: IpAddr, interval_ms: u32, timeout_ms: u32) -> Result<SessionId> {
         let id = file.id().to_string();
         let app = self.app.clone();
         let sample_id = id.clone();

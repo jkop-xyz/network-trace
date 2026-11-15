@@ -58,7 +58,7 @@ pub fn run() {
             commands::sessions_list,
             commands::session_start,
             commands::session_stop,
-            commands::session_restart,
+            commands::session_resume,
             commands::session_set_interval,
             commands::session_set_note,
             commands::sessions_delete,

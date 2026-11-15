@@ -255,6 +255,12 @@ impl SessionFile {
         Ok(())
     }
 
+    /// Marks a stopped Session as running again, with the current timeout.
+    pub fn resume(&self, timeout_ms: u32) -> Result<()> {
+        self.conn.execute("UPDATE meta SET stopped_at = NULL, timeout_ms = ?1", params![timeout_ms])?;
+        Ok(())
+    }
+
     pub fn set_note(&self, note: &str) -> Result<()> {
         self.conn.execute("UPDATE meta SET note = ?1", params![note])?;
         Ok(())
@@ -400,6 +406,20 @@ mod tests {
         store.delete(&id).unwrap();
         assert_eq!(store.size(&id), 0);
         assert!(store.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn resume_clears_the_stop_time_and_keeps_samples() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let mut file = store.create("a", "1.1.1.1".parse().unwrap(), 2500, 3000).unwrap();
+        file.append(&sample(1000, &[Some(1)])).unwrap();
+        file.stop_at(2000).unwrap();
+        file.resume(5000).unwrap();
+        let meta = file.meta().unwrap();
+        assert_eq!((meta.stopped_at, meta.timeout_ms), (None, 5000));
+        assert_eq!(file.samples(0, 10_000).unwrap().len(), 1);
+        assert_eq!(store.list().unwrap().len(), 1, "still one Session");
     }
 
     #[test]

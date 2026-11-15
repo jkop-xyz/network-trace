@@ -131,11 +131,19 @@ pub async fn session_stop(state: State<'_, AppState>, id: String) -> CmdResult<(
     Ok(())
 }
 
-/// Starts a new Session for the same Target as an old one.
+/// Continues a stopped Session in place. If another Session for the same
+/// Target is already running, that one is returned instead.
 #[tauri::command]
-pub async fn session_restart(state: State<'_, AppState>, id: String) -> CmdResult<StartResult> {
+pub async fn session_resume(state: State<'_, AppState>, id: String) -> CmdResult<StartResult> {
+    if state.is_running(&id) {
+        return Ok(StartResult { id, already_running: true });
+    }
     let meta = state.store.session(&id).and_then(|f| f.meta()).map_err(err)?;
-    session_start(state, meta.target).await
+    if let Some(other) = state.running_for(&meta.target, meta.address) {
+        return Ok(StartResult { id: other, already_running: true });
+    }
+    let id = state.resume(&id).map_err(err)?;
+    Ok(StartResult { id, already_running: false })
 }
 
 #[tauri::command]
