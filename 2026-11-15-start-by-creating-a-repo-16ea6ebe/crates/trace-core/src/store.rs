@@ -72,7 +72,18 @@ impl Store {
 
     /// Creates a new Session file and returns a writer for it.
     pub fn create(&self, target: &str, address: IpAddr, interval_ms: u32, timeout_ms: u32) -> Result<SessionFile> {
-        let started_at = now_ms();
+        self.create_at(now_ms(), target, address, interval_ms, timeout_ms)
+    }
+
+    /// Like `create`, with an explicit start time (for imports and test data).
+    pub fn create_at(
+        &self,
+        started_at: Millis,
+        target: &str,
+        address: IpAddr,
+        interval_ms: u32,
+        timeout_ms: u32,
+    ) -> Result<SessionFile> {
         let id = new_id(started_at);
         let conn = Connection::open(self.path(&id))?;
         conn.execute_batch(SCHEMA)?;
