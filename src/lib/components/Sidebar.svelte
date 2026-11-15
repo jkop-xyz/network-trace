@@ -49,7 +49,7 @@
   <form onsubmit={start}>
     <label for="target-input" class="muted small">Monitor a host</label>
     <div class="row">
-      <input id="target-input" placeholder="Hostname or IP address" bind:value={target} disabled={starting} autocomplete="off" spellcheck="false" />
+      <input id="target-input" size="1" placeholder="Hostname or IP address" bind:value={target} disabled={starting} autocomplete="off" spellcheck="false" />
       <button class="primary" disabled={starting || !target.trim()}>{starting ? "…" : "Start"}</button>
     </div>
   </form>

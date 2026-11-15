@@ -161,9 +161,13 @@
   .sidebar-slot {
     display: flex;
     min-height: 0;
+    min-width: 0;
   }
   .sidebar-slot > :global(aside) {
     flex: 1;
+    /* Without this the host entry's natural width makes the sidebar wider
+       than its column, and the main view draws over it. */
+    min-width: 0;
   }
   .topbar,
   .scrim {

@@ -22,8 +22,11 @@ mod linux {
     use anyhow::{Context, Result};
     use std::path::PathBuf;
 
-    /// Must equal the app id GTK gives the window: the Tauri `identifier`.
-    const APP_ID: &str = "app.networktrace.desktop";
+    /// Must equal the Wayland app id of the window, which GTK takes from the
+    /// program name (checked with WAYLAND_DEBUG: `set_app_id("network-trace")`).
+    const APP_ID: &str = "network-trace";
+    /// The entry beta.2–beta.5 wrote under the wrong name; removed if ours.
+    const OLD_ENTRY: &str = "app.networktrace.desktop.desktop";
     const ICON_NAME: &str = "network-trace";
     const ICON_PNG: &[u8] = include_bytes!("../icons/128x128.png");
 
@@ -51,6 +54,10 @@ mod linux {
              StartupWMClass={APP_ID}\nTerminal=false\n",
             appimage.display()
         );
+        let old = apps.join(OLD_ENTRY);
+        if std::fs::read_to_string(&old).is_ok_and(|t| t.contains("Name=Network Trace")) {
+            let _ = std::fs::remove_file(&old);
+        }
         let path = apps.join(format!("{APP_ID}.desktop"));
         // Rewrite only when it changed (e.g. the AppImage moved).
         if std::fs::read_to_string(&path).ok().as_deref() != Some(entry.as_str()) {
