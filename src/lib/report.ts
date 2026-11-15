@@ -68,18 +68,29 @@ const header: ReportSection = (d) => `
 const summary: ReportSection = (d) => `
   <section class="verdict"><h2>Summary</h2><p>${esc(verdict(d.analysis, d.view.hops, d.view.target, d.view.names))}</p></section>`;
 
-const details: ReportSection = (d) => {
+const sessionRows = (d: ReportData): [string, string][] => {
   const m = d.view.meta;
-  const rows: [string, string][] = [
+  return [
     ["Target", `${esc(m.target)}${m.target !== m.address ? ` (${esc(m.address)})` : ""}`],
     ["Time Window", `${esc(d.window.label)}: ${esc(dateTime(d.window.from))} to ${esc(dateTime(d.window.to))} (${duration(d.window.to - d.window.from)})`],
     ["Session", `started ${esc(dateTime(m.startedAt))}${m.stoppedAt ? `, stopped ${esc(dateTime(m.stoppedAt))}` : ", still running"}`],
+  ];
+};
+
+const sharedRows = (d: ReportData): [string, string][] => {
+  const m = d.view.meta;
+  const rows: [string, string][] = [
     ["Method", `ICMP echo to every Hop once per Sample, every ${interval(m.intervalMs)}; a Probe counts as lost after ${interval(m.timeoutMs)} without reply`],
     ["Measured from", esc(d.context.os)],
   ];
   if (d.context.publicIp) rows.push(["Public IP", esc(d.context.publicIp)]);
-  return `<section><table class="kv">${rows.map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`).join("")}</table></section>`;
+  return rows;
 };
+
+const kvTable = (rows: [string, string][]) =>
+  `<section><table class="kv">${rows.map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`).join("")}</table></section>`;
+
+const details: ReportSection = (d) => kvTable([...sessionRows(d), ...sharedRows(d)]);
 
 const note: ReportSection = (d) =>
   d.view.meta.note.trim()
@@ -241,23 +252,68 @@ const STYLE = `
   figcaption { font-weight: 600; margin-bottom: 4px; }
   svg { max-width: 100%; height: auto; }
   .howto, .glance, .verdict { break-inside: avoid; }
+  .verdict p + p { margin-top: 6px; }
+  .session { margin-top: 28px; padding-top: 4px; border-top: 3px solid #1a56c4; }
+  .session-title { font-size: 19px; margin: 8px 0 6px; }
+  @media print { .session { break-before: page; border-top: 0; margin-top: 0; } }
   @media print { main { padding: 0; } .banner { display: none; } @page { margin: 14mm; } }
 `;
 
-export function buildReportHtml(d: ReportData): string {
+function page(title: string, body: string): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light">
-<title>Network trace report: ${esc(d.view.meta.target)}</title><style>${STYLE}</style></head>
-<body><main>${REPORT_SECTIONS.map((s) => s(d)).join("\n")}</main></body></html>`;
+<title>${esc(title)}</title><style>${STYLE}</style></head>
+<body><main>${body}</main></body></html>`;
 }
 
-/** Gathers everything a Report needs for one Session and Time Window. */
-export async function collectReport(view: SessionView, window: ResolvedWindow): Promise<ReportData> {
+export function buildReportHtml(d: ReportData): string {
+  return page(`Network trace report: ${d.view.meta.target}`, REPORT_SECTIONS.map((s) => s(d)).join("\n"));
+}
+
+/** What each Session contributes to a combined Report. */
+const SESSION_SECTIONS: ReportSection[] = [
+  (d) => kvTable(sessionRows(d)),
+  note,
+  atAGlance,
+  targetGraph,
+  hopTable,
+  hopGraphs,
+  routeChanges,
+  gaps,
+];
+
+/** One Report covering several Sessions: a verdict per Target up front,
+ * then a section per Session, each starting on a new printed page. */
+export function buildCombinedReportHtml(all: ReportData[]): string {
+  const first = all[0];
+  const targets = all.map((d) => d.view.meta.target);
+  const head = `
+    <header>
+      <h1>Network trace report: ${all.length} targets</h1>
+      <p class="muted">${targets.map(esc).join(", ")}</p>
+      <p class="muted">Generated ${esc(dateTime(first.generatedAt))} by Network Trace ${esc(first.context.appVersion)}</p>
+    </header>`;
+  const summaries = `
+    <section class="verdict"><h2>Summary</h2>${all
+      .map((d) => `<p><b>${esc(d.view.meta.target)}:</b> ${esc(verdict(d.analysis, d.view.hops, d.view.target, d.view.names))}</p>`)
+      .join("")}</section>`;
+  const shared = kvTable([["Time Window", esc(first.window.label)], ...sharedRows(first)]);
+  const sessions = all
+    .map(
+      (d) => `<section class="session"><h1 class="session-title">${esc(d.view.meta.target)}</h1>${SESSION_SECTIONS.map((s) => s(d)).join("\n")}</section>`,
+    )
+    .join("\n");
+  return page(`Network trace report: ${targets.join(", ")}`, [banner(first), head, summaries, shared, sessions, howToRead(first)].join("\n"));
+}
+
+/** Gathers everything a Report needs for one Session and Time Window.
+ * Pass `context` when building several Reports so it's fetched once. */
+export async function collectReport(view: SessionView, window: ResolvedWindow, context?: ReportContext): Promise<ReportData> {
   const buckets = bucketsFor(REPORT_WIDTH, window.to - window.from, view.meta.intervalMs);
   const { id } = view.meta;
   const analysis = analyse(view.hops, view.target);
-  const [finalTimeline, context, hopGraphs] = await Promise.all([
+  const [finalTimeline, ctx, hopGraphs] = await Promise.all([
     api.sessionTimeline(id, { kind: "final" }, window.from, window.to, buckets),
-    api.reportContext(),
+    context ?? api.reportContext(),
     Promise.all(
       graphedHops(view, analysis).map(async ({ hop, caption }) => ({
         hop,
@@ -267,5 +323,5 @@ export async function collectReport(view: SessionView, window: ResolvedWindow): 
     ),
   ]);
   const yMax = yScaleFor(finalTimeline, ...hopGraphs.map((g) => g.buckets));
-  return { view, window, analysis, finalTimeline, hopGraphs, yMax, context, generatedAt: Date.now() };
+  return { view, window, analysis, finalTimeline, hopGraphs, yMax, context: ctx, generatedAt: Date.now() };
 }

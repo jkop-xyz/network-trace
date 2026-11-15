@@ -5,7 +5,8 @@
   import { onMount } from "svelte";
   import { api, type Gap, type SessionSummary, type TargetStats } from "$lib/api";
   import { ms, pct } from "$lib/format";
-  import { PRESETS, resolveWindow, type PresetId } from "$lib/timeWindow";
+  import { PRESETS, globalWindow, resolveWindow, setGlobalWindow, type TimeWindow } from "$lib/timeWindow";
+  import CombinedExport from "./CombinedExport.svelte";
   import Timeline from "./Timeline.svelte";
 
   interface Props {
@@ -42,7 +43,13 @@
   }
 
   let layoutId = $state(load("overview.layout", "2x2"));
-  let preset = $state<PresetId>(load("overview.window", "30m"));
+  // The Overview's Time Window is the one set for all Sessions.
+  let tw = $state<TimeWindow>(globalWindow() ?? { preset: "30m" });
+  let exporting = $state(false);
+  function chooseWindow(id: string) {
+    tw = { preset: id as TimeWindow["preset"] };
+    setGlobalWindow(tw);
+  }
   let assigned = $state<(string | null)[]>(load("overview.cells", []));
   let tick = $state(0);
   let cellHeights = $state<number[]>([]);
@@ -67,7 +74,6 @@
   });
 
   $effect(() => store("overview.layout", layoutId));
-  $effect(() => store("overview.window", preset));
 
   function assign(index: number, id: string) {
     const next = cells.map((c) => c?.id ?? null);
@@ -77,7 +83,7 @@
   }
 
   function windowFor(s: SessionSummary) {
-    return resolveWindow({ preset }, s);
+    return resolveWindow(tw, s);
   }
 
   async function refreshStats() {
@@ -103,7 +109,7 @@
 
   $effect(() => {
     void cells;
-    void preset;
+    void tw;
     refreshStats();
   });
 
@@ -130,14 +136,20 @@
           <button class:active={l.id === layoutId} aria-pressed={l.id === layoutId} onclick={() => (layoutId = l.id)}>{l.cols}×{l.rows}</button>
         {/each}
       </div>
-      <label>
-        <span class="muted">Time Window</span>
-        <select bind:value={preset}>
+      <label title="Applies to every Session">
+        <span class="muted">Time Window (all Sessions)</span>
+        <select value={tw.preset} onchange={(e) => chooseWindow(e.currentTarget.value)}>
           {#each WINDOW_PRESETS as p (p.id)}<option value={p.id}>{p.label}</option>{/each}
+          {#if tw.preset === "custom"}<option value="custom" disabled>Custom range</option>{/if}
         </select>
       </label>
+      <button class="primary" onclick={() => (exporting = true)} disabled={!sessions.length}>Export combined Report</button>
     </div>
   </header>
+
+  {#if exporting}
+    <CombinedExport {sessions} window={tw} onClose={() => (exporting = false)} />
+  {/if}
 
   <div class="grid" style:grid-template-columns="repeat({layout.cols}, minmax(0, 1fr))" style:grid-template-rows="repeat({layout.rows}, minmax(0, 1fr))">
     {#each cells as s, i (i)}

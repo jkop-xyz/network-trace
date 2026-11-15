@@ -44,11 +44,36 @@ function readAll(): Record<string, TimeWindow> {
   }
 }
 
-/** The Time Window last chosen for a Session, if any. Kept on this computer
- * only; storage may be unavailable, in which case nothing is remembered. */
+const GLOBAL_KEY = "timeWindow.all";
+const valid = (w: TimeWindow | null | undefined): w is TimeWindow => !!w && PRESETS.some((p) => p.id === w.preset);
+
+/** The Time Window set for all Sessions, if any. */
+export function globalWindow(): TimeWindow | null {
+  try {
+    const w = JSON.parse(localStorage.getItem(GLOBAL_KEY) ?? "null");
+    return valid(w) ? w : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Uses one Time Window for every Session, replacing choices made for
+ * individual Sessions. */
+export function setGlobalWindow(w: TimeWindow) {
+  try {
+    localStorage.setItem(GLOBAL_KEY, JSON.stringify(w));
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    /* not remembered */
+  }
+}
+
+/** The Time Window to show for a Session: the one chosen for it, else the
+ * one set for all Sessions. Kept on this computer only; storage may be
+ * unavailable, in which case nothing is remembered. */
 export function rememberedWindow(sessionId: string): TimeWindow | null {
-  const w = readAll()[sessionId];
-  return w && PRESETS.some((p) => p.id === w.preset) ? w : null;
+  const own = readAll()[sessionId];
+  return valid(own) ? own : globalWindow();
 }
 
 export function rememberWindow(sessionId: string, w: TimeWindow) {

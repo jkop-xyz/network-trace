@@ -12,6 +12,7 @@
     forgetWindows,
     rememberWindow,
     rememberedWindow,
+    setGlobalWindow,
     resolveWindow,
     type ResolvedWindow,
     type TimeWindow,
@@ -36,6 +37,13 @@
   function setWindow(w: TimeWindow) {
     tw = w;
     rememberWindow(summary.id, w);
+  }
+
+  let appliedToAll = $state(false);
+  function applyToAll() {
+    setGlobalWindow(tw);
+    appliedToAll = true;
+    setTimeout(() => (appliedToAll = false), 2500);
   }
   let win = $state<ResolvedWindow | null>(null);
   let view = $state<SessionView | null>(null);
@@ -305,6 +313,9 @@
     {:else if win}
       <span class="muted small">{shortStamp(win.from)} – {shortStamp(win.to)}</span>
     {/if}
+    <button class="link small" onclick={applyToAll} title="Use this Time Window for every Session and the Overview"
+      >{appliedToAll ? "Applied to all Sessions" : "Apply to all Sessions"}</button
+    >
     <span class="spacer"></span>
     <div class="exports">
       <button class="primary" onclick={() => exportReport("pdf")} disabled={!!busy || !view?.hops.length}>Export Report (PDF)</button>

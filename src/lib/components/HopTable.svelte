@@ -98,18 +98,20 @@
   .wrap {
     container-type: inline-size;
     overflow-x: auto;
+    /* Room for a horizontal scrollbar, so it never covers the last row. */
+    padding-bottom: 12px;
   }
-  @container (max-width: 860px) {
+  @container (max-width: 1000px) {
     .bar-col {
       display: none;
     }
   }
-  @container (max-width: 700px) {
+  @container (max-width: 780px) {
     .opt-1 {
       display: none;
     }
   }
-  @container (max-width: 600px) {
+  @container (max-width: 640px) {
     .opt-2 {
       display: none;
     }
