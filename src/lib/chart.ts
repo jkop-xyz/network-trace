@@ -25,6 +25,8 @@ const LEFT = 50;
 const RIGHT = 8;
 const TOP = 10;
 const LOSS_H = 30;
+/** Smallest loss bar, so a single lost Probe is visible on any window. */
+const MIN_LOSS_H = 4;
 
 const STEPS = [
   60e3, 2 * 60e3, 5 * 60e3, 10 * 60e3, 15 * 60e3, 30 * 60e3, 3600e3, 2 * 3600e3, 3 * 3600e3, 6 * 3600e3,
@@ -145,8 +147,11 @@ export function timelineSvg(buckets: Bucket[], opts: TimelineOptions): string {
       if (bw >= 6) dots.push(`<circle cx="${cx.toFixed(1)}" cy="${y(b.avgMs).toFixed(1)}" r="2" style="fill:${C.avg}"/>`);
     }
     if (b.lost > 0) {
-      const h = (b.lost / b.sent) * LOSS_H;
-      parts.push(`<rect x="${bx}" y="${lossTop + LOSS_H - h}" width="${Math.max(bw, 1)}" height="${h}" style="fill:${C.loss}"/>`);
+      // On long windows a bucket holds dozens of Samples, so one lost Probe
+      // would be a sub-pixel bar. Any loss gets at least MIN_LOSS_H.
+      const h = Math.max(MIN_LOSS_H, (b.lost / b.sent) * LOSS_H);
+      const tip = `${b.lost} of ${b.sent} Probes lost, ${time(b.start, false)}–${time(b.end, false)}`;
+      parts.push(`<rect x="${bx}" y="${lossTop + LOSS_H - h}" width="${Math.max(bw, 1.5)}" height="${h}" style="fill:${C.loss}"><title>${tip}</title></rect>`);
     }
   });
   if (avgPath) {

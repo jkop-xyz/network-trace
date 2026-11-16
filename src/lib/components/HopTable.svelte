@@ -67,7 +67,7 @@
           {#if h.address && names[h.address]}<div class="name muted small">{names[h.address]}</div>{/if}
         </td>
         <td class="num opt-2">{h.sent}</td>
-        <td class="num loss" title={lossTitle[kind]}>
+        <td class="num loss" title={[`${h.lost} of ${h.sent} Probes lost`, lossTitle[kind]].filter(Boolean).join("\n")}>
           {#if kind === "no-reply"}<span class="muted">–</span>{:else}{pct(h.lossPct)}{/if}
         </td>
         <td class="num">{ms(h.minMs)}</td>
