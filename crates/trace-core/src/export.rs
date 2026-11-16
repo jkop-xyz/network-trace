@@ -61,8 +61,8 @@ mod tests {
             interval_ms: 1000,
             target_known: true,
             hops: vec![
-                HopResult { hop: 1, address: Some("10.0.0.1".parse().unwrap()), rtt_us: Some(1234) },
-                HopResult { hop: 2, address: None, rtt_us: None },
+                HopResult { hop: 1, address: Some("10.0.0.1".parse().unwrap()), rtt_us: Some(1234), unreachable_from: None },
+                HopResult { hop: 2, ..Default::default() },
             ],
         })
         .unwrap();

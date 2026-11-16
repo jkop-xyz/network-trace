@@ -55,7 +55,7 @@
   let message = $state("");
   let savedPath = $state<string | null>(null);
 
-  const analysis = $derived(view ? analyse(view.hops, view.target) : null);
+  const analysis = $derived(view ? analyse(view.hops, view.target, view.outages) : null);
   const sessionSpan = $derived(
     Math.max(summary.lastSample ?? 0, summary.stoppedAt ?? 0, summary.running ? Date.now() : 0) - summary.startedAt,
   );

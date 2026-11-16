@@ -36,7 +36,11 @@ _Avoid_: Round, iteration, tick
 
 **Gap**:
 A stretch of a Session with no Samples because nothing was being sent, for example while the machine slept or the Session was stopped. A Gap is not loss.
-_Avoid_: Outage, downtime
+_Avoid_: Downtime
+
+**Outage**:
+A stretch of at least three Samples in a row in which the Target did not answer. Unlike a Gap, Probes were being sent and lost. A Report says which Hop still answered during each Outage, and whether a router reported it had no route onward ("destination unreachable").
+_Avoid_: Dip, drop, disconnect
 
 **Time Window**:
 The part of a Session being looked at or exported, either a preset (last 30 minutes, last 24 hours, full Session and so on) or a custom range.

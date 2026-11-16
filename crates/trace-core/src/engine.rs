@@ -37,6 +37,9 @@ pub struct RouteState {
     pub last_responder: Option<u8>,
     /// Samples sent since the last one that probed every TTL.
     pub since_full_probe: u32,
+    /// The router last seen answering at each Hop, to recognise it when it
+    /// answers "destination unreachable" for its own Hop.
+    pub hop_addresses: [Option<IpAddr>; MAX_HOPS as usize],
 }
 
 impl RouteState {
@@ -77,17 +80,23 @@ pub struct Assembled {
 ///   and is re-discovered next Sample.
 /// - Nothing known yet: record up to the last Hop that answered.
 ///
-/// A "destination unreachable" from a router (not the Target) counts as lost:
-/// it means the packet didn't get through, e.g. the home router's internet
-/// link is down. It doesn't change the Route either.
+/// A "destination unreachable" from a router means the packet didn't get
+/// through, e.g. the home router's internet link is down: the Hops it answers
+/// for count as lost, with the router noted in `unreachable_from`. The one
+/// exception is the router's own Hop: a router with no route onward answers
+/// even TTL-limited Probes that way, and it did answer, so that Hop counts as
+/// answered. Otherwise a dead internet link would look like a fault in the
+/// local network.
 pub fn assemble(target: IpAddr, outcomes: &[io::Result<ProbeOutcome>], state: &mut RouteState) -> Assembled {
     let reached = outcomes.iter().position(|o| match o {
         Ok(ProbeOutcome::Echo { .. }) => true,
         Ok(ProbeOutcome::Unreachable { from, .. }) => *from == target,
         _ => false,
     });
-    let answered = |o: &io::Result<ProbeOutcome>| match o {
-        Ok(ProbeOutcome::Unreachable { from, .. }) => *from == target,
+    let known_at = state.hop_addresses;
+    // Whether the Probe sent with TTL `i + 1` got an answer for that Hop.
+    let answered_at = |i: usize, o: &io::Result<ProbeOutcome>| match o {
+        Ok(ProbeOutcome::Unreachable { from, .. }) => *from == target || known_at.get(i) == Some(&Some(*from)),
         Ok(o) => o.responder().is_some(),
         Err(_) => false,
     };
@@ -109,7 +118,7 @@ pub fn assemble(target: IpAddr, outcomes: &[io::Result<ProbeOutcome>], state: &m
             }
         }
         (None, None) => {
-            let last = outcomes.iter().rposition(answered);
+            let last = outcomes.iter().enumerate().rposition(|(i, o)| answered_at(i, o));
             if let Some(i) = last {
                 state.last_responder = Some(i as u8 + 1);
             }
@@ -121,14 +130,24 @@ pub fn assemble(target: IpAddr, outcomes: &[io::Result<ProbeOutcome>], state: &m
         .iter()
         .enumerate()
         .map(|(i, o)| {
-            let responder = if answered(o) { o.as_ref().ok().and_then(|o| o.responder()) } else { None };
+            let responder = if answered_at(i, o) { o.as_ref().ok().and_then(|o| o.responder()) } else { None };
+            let unreachable_from = match o {
+                Ok(ProbeOutcome::Unreachable { from, .. }) if responder.is_none() => Some(*from),
+                _ => None,
+            };
             HopResult {
                 hop: i as u8 + 1,
                 address: responder.map(|(a, _)| a),
                 rtt_us: responder.map(|(_, rtt)| rtt.as_micros().min(u32::MAX as u128) as u32),
+                unreachable_from,
             }
         })
-        .collect();
+        .collect::<Vec<_>>();
+    for h in &hops {
+        if let (Some(a), Some(slot)) = (h.address, state.hop_addresses.get_mut(h.hop as usize - 1)) {
+            *slot = Some(a);
+        }
+    }
     Assembled { hops, target_known }
 }
 
@@ -293,8 +312,8 @@ mod tests {
         let a = assemble(ip(T), &[hop("10.0.0.1", 1), lost(), echo(T, 9), echo(T, 9), echo(T, 9)], &mut st);
         assert_eq!(a.hops.len(), 3);
         assert!(a.target_known);
-        assert_eq!(a.hops[1], HopResult { hop: 2, address: None, rtt_us: None });
-        assert_eq!(a.hops[2], HopResult { hop: 3, address: Some(ip(T)), rtt_us: Some(9000) });
+        assert_eq!(a.hops[1], HopResult { hop: 2, ..Default::default() });
+        assert_eq!(a.hops[2], HopResult { hop: 3, address: Some(ip(T)), rtt_us: Some(9000), unreachable_from: None });
         assert_eq!(st.length, Some(3));
     }
 
@@ -319,6 +338,23 @@ mod tests {
         assert!(a.target_known);
         assert_eq!(a.hops[0].address, Some(ip(gw)));
         assert!(a.hops[1..].iter().all(|h| h.address.is_none() && h.rtt_us.is_none()), "{:?}", a.hops);
+        assert!(a.hops[1..].iter().all(|h| h.unreachable_from == Some(ip(gw))), "the router that said so is noted");
+        assert_eq!(a.hops[0].unreachable_from, None);
+    }
+
+    #[test]
+    fn router_saying_unreachable_for_its_own_hop_answered_that_hop() {
+        // A Linux-based home router with its internet link down answers even
+        // TTL 1 with "network unreachable" (it looks up the route before the
+        // TTL). It still answered, so only the Hops beyond it are lost.
+        let gw = "192.168.1.1";
+        let mut st = known(3);
+        assemble(ip(T), &[hop(gw, 1), hop("10.0.0.2", 5), echo(T, 9)], &mut st);
+        let a = assemble(ip(T), &[unreachable(gw), unreachable(gw), unreachable(gw)], &mut st);
+        assert_eq!(a.hops[0], HopResult { hop: 1, address: Some(ip(gw)), rtt_us: Some(1000), unreachable_from: None });
+        assert!(a.hops[1..].iter().all(|h| h.rtt_us.is_none() && h.unreachable_from == Some(ip(gw))), "{:?}", a.hops);
+        assert!(a.target_known);
+        assert_eq!(st.length, Some(3));
     }
 
     #[test]

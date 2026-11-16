@@ -1,7 +1,7 @@
 //! Statistics over a Time Window of a Session: per-Hop figures, timeline
 //! buckets, Gaps and Route Changes. These feed both the screen and Reports.
 
-use crate::model::Millis;
+use crate::model::{Millis, Sample};
 use crate::store::SessionFile;
 use anyhow::Result;
 use rusqlite::params;
@@ -259,17 +259,98 @@ pub struct Gap {
     pub end: Millis,
 }
 
-/// Stretches with no Samples: consecutive Samples further apart than three
-/// intervals plus a second.
+/// Whether two consecutive Samples are far enough apart to have a Gap
+/// between them: more than three intervals plus a second. Uses the longer
+/// of the two intervals so changing the interval (say from 1 s to 60 s)
+/// doesn't look like a Gap.
+fn is_gap(a: (Millis, u32), b: (Millis, u32)) -> bool {
+    b.0 - a.0 > 3 * a.1.max(b.1) as i64 + 1000
+}
+
+/// Stretches with no Samples.
 pub fn gaps(file: &SessionFile, from: Millis, to: Millis) -> Result<Vec<Gap>> {
     let times = file.sample_times(from, to)?;
-    Ok(times
-        .windows(2)
-        // Use the longer of the two intervals so changing the interval
-        // (say from 1 s to 60 s) doesn't look like a Gap.
-        .filter(|w| w[1].0 - w[0].0 > 3 * w[0].1.max(w[1].1) as i64 + 1000)
-        .map(|w| Gap { start: w[0].0, end: w[1].0 })
-        .collect())
+    Ok(times.windows(2).filter(|w| is_gap(w[0], w[1])).map(|w| Gap { start: w[0].0, end: w[1].0 }).collect())
+}
+
+/// This many unanswered Samples in a row make an Outage.
+pub const OUTAGE_MIN_SAMPLES: usize = 3;
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Outage {
+    /// Time of the first Sample the Target didn't answer.
+    pub start: Millis,
+    /// Time of the first Sample it answered again or, if it hadn't by the
+    /// end of the window or a Gap, of the last one it didn't answer.
+    pub end: Millis,
+    pub recovered: bool,
+    pub samples: u32,
+    /// The furthest Hop that kept answering through the Outage (in at least
+    /// half of its Samples), if any did.
+    pub last_hop: Option<u8>,
+    pub last_address: Option<IpAddr>,
+    /// A router that answered "destination unreachable" during the Outage:
+    /// it was reachable but had no route onward.
+    pub unreachable_from: Option<IpAddr>,
+    /// That router's own Hop, if it answered there.
+    pub unreachable_hop: Option<u8>,
+}
+
+/// Outages in the window: runs of Samples in which the Target didn't answer.
+/// Samples taken while the route was unknown are skipped; a Gap ends a run.
+pub fn outages(file: &SessionFile, from: Millis, to: Millis) -> Result<Vec<Outage>> {
+    let samples = file.samples(from, to)?;
+    let mut out = Vec::new();
+    let mut run: Vec<&Sample> = Vec::new();
+    let mut prev: Option<&Sample> = None;
+    for s in samples.iter().filter(|s| s.target_known) {
+        if prev.is_some_and(|p| is_gap((p.ts, p.interval_ms), (s.ts, s.interval_ms))) {
+            out.extend(outage_from(&run, None));
+            run.clear();
+        }
+        if s.hops.last().is_none_or(|h| h.rtt_us.is_none()) {
+            run.push(s);
+        } else {
+            out.extend(outage_from(&run, Some(s.ts)));
+            run.clear();
+        }
+        prev = Some(s);
+    }
+    out.extend(outage_from(&run, None));
+    Ok(out)
+}
+
+fn outage_from(run: &[&Sample], recovered_at: Option<Millis>) -> Option<Outage> {
+    if run.len() < OUTAGE_MIN_SAMPLES {
+        return None;
+    }
+    let answered_in = |hop: u8| run.iter().filter(|s| s.hops.iter().any(|h| h.hop == hop && h.rtt_us.is_some())).count();
+    let max_hop = run.iter().map(|s| s.hops.len() as u8).max().unwrap_or(0);
+    let last_hop = (1..=max_hop).rev().find(|&hop| answered_in(hop) * 2 >= run.len());
+    let address_at = |hop: u8| run.iter().flat_map(|s| s.hops.iter()).find(|h| h.hop == hop && h.address.is_some()).and_then(|h| h.address);
+
+    // The router that most often said "unreachable".
+    let mut counts: BTreeMap<IpAddr, usize> = BTreeMap::new();
+    for h in run.iter().flat_map(|s| s.hops.iter()) {
+        if let Some(a) = h.unreachable_from {
+            *counts.entry(a).or_default() += 1;
+        }
+    }
+    let unreachable_from = counts.into_iter().max_by_key(|&(_, n)| n).map(|(a, _)| a);
+    let unreachable_hop = unreachable_from
+        .and_then(|a| run.iter().flat_map(|s| s.hops.iter()).find(|h| h.address == Some(a)).map(|h| h.hop));
+
+    Some(Outage {
+        start: run[0].ts,
+        end: recovered_at.unwrap_or(run[run.len() - 1].ts),
+        recovered: recovered_at.is_some(),
+        samples: run.len() as u32,
+        last_hop,
+        last_address: last_hop.and_then(address_at),
+        unreachable_from,
+        unreachable_hop,
+    })
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -344,7 +425,7 @@ mod tests {
             hops: hops
                 .iter()
                 .enumerate()
-                .map(|(i, (address, rtt_us))| HopResult { hop: i as u8 + 1, address: *address, rtt_us: *rtt_us })
+                .map(|(i, (address, rtt_us))| HopResult { hop: i as u8 + 1, address: *address, rtt_us: *rtt_us, unreachable_from: None })
                 .collect(),
         }
     }
@@ -426,6 +507,62 @@ mod tests {
         let (_dir, file) = session(&[sample(0, &[]), sample(1000, &[]), sample(60_000, &[]), sample(61_000, &[])]);
         // Samples with no hops are not stored by `samples` joins but are in sample_times.
         assert_eq!(gaps(&file, 0, 100_000).unwrap(), vec![Gap { start: 1000, end: 60_000 }]);
+    }
+
+    /// A Sample's Hops where only those before `hop` answer.
+    fn lost_from(hop: u8, len: u8) -> Vec<(Option<IpAddr>, Option<u32>)> {
+        (1..=len).map(|h| if h < hop { (a(h), Some(1000)) } else { (None, None) }).collect()
+    }
+
+    #[test]
+    fn outages_are_runs_of_unanswered_samples() {
+        let ok = |ts| sample(ts, &[(a(1), Some(1000)), (a(2), Some(2000)), (a(9), Some(9000))]);
+        let mut samples = vec![ok(0)];
+        // Four Samples where only Hop 1 answers, then recovery.
+        for i in 1..=4 {
+            samples.push(sample(i * 1000, &lost_from(2, 3)));
+        }
+        samples.push(ok(5000));
+        // Two unanswered Samples: loss, but too short to be an Outage.
+        samples.push(sample(6000, &lost_from(1, 3)));
+        samples.push(sample(7000, &lost_from(1, 3)));
+        samples.push(ok(8000));
+        // An Outage still going at the end of the window.
+        for i in 9..=11 {
+            samples.push(sample(i * 1000, &lost_from(1, 3)));
+        }
+        let (_dir, file) = session(&samples);
+        let o = outages(&file, 0, 20_000).unwrap();
+        assert_eq!(o.len(), 2, "{o:?}");
+        assert_eq!((o[0].start, o[0].end, o[0].recovered, o[0].samples), (1000, 5000, true, 4));
+        assert_eq!((o[0].last_hop, o[0].last_address), (Some(1), a(1)));
+        assert_eq!(o[0].unreachable_from, None);
+        assert_eq!((o[1].start, o[1].end, o[1].recovered, o[1].last_hop), (9000, 11_000, false, None));
+    }
+
+    #[test]
+    fn outage_notes_the_router_that_reported_no_route() {
+        let gw = a(1);
+        let mut samples = vec![sample(0, &[(gw, Some(1000)), (a(2), Some(2000)), (a(9), Some(9000))])];
+        for i in 1..=3 {
+            let mut s = sample(i * 1000, &[(gw, Some(1000)), (None, None), (None, None)]);
+            s.hops[1].unreachable_from = gw;
+            s.hops[2].unreachable_from = gw;
+            samples.push(s);
+        }
+        let (_dir, file) = session(&samples);
+        let o = outages(&file, 0, 10_000).unwrap();
+        assert_eq!(o.len(), 1);
+        assert_eq!((o[0].unreachable_from, o[0].unreachable_hop, o[0].last_hop), (gw, Some(1), Some(1)));
+    }
+
+    #[test]
+    fn a_gap_ends_an_outage() {
+        let lost = |ts| sample(ts, &lost_from(1, 2));
+        let (_dir, file) = session(&[lost(0), lost(1000), lost(2000), lost(60_000), lost(61_000)]);
+        let o = outages(&file, 0, 100_000).unwrap();
+        assert_eq!(o.len(), 1, "the two lost Samples after the Gap are too few: {o:?}");
+        assert_eq!((o[0].end, o[0].recovered), (2000, false));
     }
 
     #[test]

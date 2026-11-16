@@ -33,12 +33,16 @@ pub struct SessionMeta {
 }
 
 /// The result of one Probe as stored: lost when `rtt_us` is `None`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HopResult {
     pub hop: u8,
     pub address: Option<IpAddr>,
     pub rtt_us: Option<u32>,
+    /// For a lost Probe: a router further back answered "destination
+    /// unreachable" for it, i.e. it had no route onward.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unreachable_from: Option<IpAddr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

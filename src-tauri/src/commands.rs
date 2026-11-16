@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::net::IpAddr;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use trace_core::model::{Millis, SessionId, SessionMeta};
-use trace_core::stats::{self, Bucket, Gap, HopStats, RouteChange, TargetStats, TimelineHop};
+use trace_core::stats::{self, Bucket, Gap, HopStats, Outage, RouteChange, TargetStats, TimelineHop};
 use trace_core::store::StoredSession;
 
 type CmdResult<T> = Result<T, String>;
@@ -195,6 +195,7 @@ pub struct SessionView {
     target: Option<TargetStats>,
     gaps: Vec<Gap>,
     route_changes: Vec<RouteChange>,
+    outages: Vec<Outage>,
     /// Reverse DNS names for every address mentioned above.
     names: std::collections::HashMap<String, String>,
 }
@@ -203,7 +204,7 @@ pub struct SessionView {
 pub async fn session_view(state: State<'_, AppState>, id: String, from: Millis, to: Millis) -> CmdResult<SessionView> {
     let store = state.store.clone();
     let vid = id.clone();
-    let (meta, range, hops, target, gaps, route_changes) = blocking(move || {
+    let (meta, range, hops, target, gaps, route_changes, outages) = blocking(move || {
         let file = store.session(&vid)?;
         Ok((
             file.meta()?,
@@ -212,6 +213,7 @@ pub async fn session_view(state: State<'_, AppState>, id: String, from: Millis, 
             stats::target_stats(&file, from, to)?,
             stats::gaps(&file, from, to)?,
             stats::route_changes(&file, from, to)?,
+            stats::outages(&file, from, to)?,
         ))
     })
     .await?;
@@ -224,6 +226,9 @@ pub async fn session_view(state: State<'_, AppState>, id: String, from: Millis, 
         for c in &rc.changes {
             addresses.extend(c.from.iter().chain(c.to.iter()).copied());
         }
+    }
+    for o in &outages {
+        addresses.extend(o.last_address.iter().chain(o.unreachable_from.iter()).copied());
     }
     let names = names_for(&state, addresses);
     let hops = hops
@@ -243,6 +248,7 @@ pub async fn session_view(state: State<'_, AppState>, id: String, from: Millis, 
         target,
         gaps,
         route_changes,
+        outages,
         names,
     })
 }

@@ -4,9 +4,9 @@
 // Report, add, remove or reorder sections there; each one only reads
 // ReportData and returns HTML.
 
-import type { Bucket, HopStats, ReportContext, SessionView } from "./api";
+import type { Bucket, HopStats, Outage, ReportContext, SessionView } from "./api";
 import { api } from "./api";
-import { analyse, verdict, worstStretch, type Analysis } from "./analysis";
+import { analyse, OUTAGE_MIN_SAMPLES, outageSummary, routerLabel, verdict, worstStretch, type Analysis } from "./analysis";
 import { bucketsFor, timelineSvg, yScaleFor } from "./chart";
 import { dateTime, duration, escapeHtml as esc, interval, ms, pct, shortStamp, time } from "./format";
 import type { ResolvedWindow } from "./timeWindow";
@@ -65,8 +65,15 @@ const header: ReportSection = (d) => `
     <p class="muted">Generated ${esc(dateTime(d.generatedAt))} by Network Trace ${esc(d.context.appVersion)}</p>
   </header>`;
 
+/** The verdict, then the Outages, as paragraphs. */
+const summaryParagraphs = (d: ReportData, lead = "") =>
+  [verdict(d.analysis, d.view.hops, d.view.target, d.view.names), outageSummary(d.view.outages, d.view.names)]
+    .filter(Boolean)
+    .map((text, i) => `<p>${i === 0 ? lead : ""}${esc(text)}</p>`)
+    .join("");
+
 const summary: ReportSection = (d) => `
-  <section class="verdict"><h2>Summary</h2><p>${esc(verdict(d.analysis, d.view.hops, d.view.target, d.view.names))}</p></section>`;
+  <section class="verdict"><h2>Summary</h2>${summaryParagraphs(d)}</section>`;
 
 const sessionRows = (d: ReportData): [string, string][] => {
   const m = d.view.meta;
@@ -112,6 +119,43 @@ const atAGlance: ReportSection = (d) => {
   return `<section class="glance">${items
     .map(([label, value, sub]) => `<div><div class="label">${label}</div><div class="value">${value}</div><div class="muted">${sub}</div></div>`)
     .join("")}</section>`;
+};
+
+/** What the route looked like during one Outage. */
+function outageCause(o: Outage, d: ReportData): string {
+  const names = d.view.names;
+  if (o.unreachableFrom) {
+    return `${esc(routerLabel(o.unreachableFrom, o.unreachableHop, names))} answered <b>“destination unreachable”</b>: it had no route onward.`;
+  }
+  if (o.lastHop != null && o.lastAddress) {
+    return `${esc(routerLabel(o.lastAddress, o.lastHop, names))} still answered; nothing beyond it did.`;
+  }
+  return o.lastHop != null ? `Hops up to ${o.lastHop} still answered; nothing beyond them did.` : "Nothing answered, not even Hop 1.";
+}
+
+const outages: ReportSection = (d) => {
+  const list = d.view.outages;
+  if (!list.length) return "";
+  const rows = list
+    .slice(0, 200)
+    .map(
+      (o) => `<tr>
+        <td>${esc(dateTime(o.start))}</td>
+        <td>${o.recovered ? "" : "≥ "}${duration(o.end - o.start)}${o.recovered ? "" : `<div class="muted small">not over by the end of the window</div>`}</td>
+        <td>${o.samples}</td>
+        <td>${outageCause(o, d)}</td>
+      </tr>`,
+    )
+    .join("");
+  return `
+  <section>
+    <h2>Outages</h2>
+    <p class="muted small">Times when the target did not answer for ${OUTAGE_MIN_SAMPLES} or more Samples in a row. The duration runs from the first unanswered Sample to the first answered one.</p>
+    <table class="hops outages">
+      <thead><tr><th>Start</th><th>Duration</th><th>Samples lost</th><th>What still answered</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>${list.length > 200 ? `<p class="muted small">First 200 of ${list.length} shown.</p>` : ""}
+  </section>`;
 };
 
 const hopTable: ReportSection = (d) => {
@@ -200,6 +244,7 @@ const howToRead: ReportSection = () => `
       <li>Each Hop is a router between this computer and the target, numbered by distance. Hop 1 is usually the local router.</li>
       <li>Loss or high latency that starts at one Hop <em>and continues through every later Hop to the target</em> points at that Hop or the link just before it.</li>
       <li>Loss at a middle Hop that does not carry through to the target is usually that router limiting how often it answers probes, not a fault.</li>
+      <li>During an Outage, a router that answers “destination unreachable” is telling us it is up but has no route onward: the connection beyond it is down.</li>
       <li>All times, including graph axes, are local time with the UTC offset shown.</li>
     </ul>
   </section>`;
@@ -213,6 +258,7 @@ export const REPORT_SECTIONS: ReportSection[] = [
   note,
   atAGlance,
   targetGraph,
+  outages,
   hopTable,
   hopGraphs,
   routeChanges,
@@ -238,6 +284,8 @@ const STYLE = `
   .kv td { padding: 3px 0; }
   .hops th, .hops td { text-align: right; padding: 4px 6px; border-bottom: 1px solid #eceef2; font-variant-numeric: tabular-nums; }
   .hops th:nth-child(2), .hops td:nth-child(2) { text-align: left; }
+  .outages th, .outages td { vertical-align: top; }
+  .outages th:first-child, .outages td:first-child, .outages th:last-child, .outages td:last-child { text-align: left; }
   .hops th { background: #f4f5f8; font-weight: 600; }
   .hops tr.carried td { background: #fdecea; }
   .loss { color: #c5221f; }
@@ -275,6 +323,7 @@ const SESSION_SECTIONS: ReportSection[] = [
   note,
   atAGlance,
   targetGraph,
+  outages,
   hopTable,
   hopGraphs,
   routeChanges,
@@ -294,7 +343,7 @@ export function buildCombinedReportHtml(all: ReportData[]): string {
     </header>`;
   const summaries = `
     <section class="verdict"><h2>Summary</h2>${all
-      .map((d) => `<p><b>${esc(d.view.meta.target)}:</b> ${esc(verdict(d.analysis, d.view.hops, d.view.target, d.view.names))}</p>`)
+      .map((d) => summaryParagraphs(d, `<b>${esc(d.view.meta.target)}:</b> `))
       .join("")}</section>`;
   const shared = kvTable([["Time Window", esc(first.window.label)], ...sharedRows(first)]);
   const sessions = all
@@ -310,7 +359,7 @@ export function buildCombinedReportHtml(all: ReportData[]): string {
 export async function collectReport(view: SessionView, window: ResolvedWindow, context?: ReportContext): Promise<ReportData> {
   const buckets = bucketsFor(REPORT_WIDTH, window.to - window.from, view.meta.intervalMs);
   const { id } = view.meta;
-  const analysis = analyse(view.hops, view.target);
+  const analysis = analyse(view.hops, view.target, view.outages);
   const [finalTimeline, ctx, hopGraphs] = await Promise.all([
     api.sessionTimeline(id, { kind: "final" }, window.from, window.to, buckets),
     context ?? api.reportContext(),

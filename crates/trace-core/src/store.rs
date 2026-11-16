@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS probes (
     hop       INTEGER NOT NULL,
     address   TEXT,
     rtt_us    INTEGER,
+    -- Lost Probes only: the router that said the destination was unreachable.
+    unreachable_from TEXT,
     PRIMARY KEY (sample_id, hop)
 ) WITHOUT ROWID;
 ";
@@ -182,6 +184,12 @@ fn migrate(conn: &Connection) -> Result<()> {
     if !has_target_known {
         conn.execute_batch("ALTER TABLE samples ADD COLUMN target_known INTEGER NOT NULL DEFAULT 1")?;
     }
+    let has_unreachable: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('probes') WHERE name = 'unreachable_from'")?
+        .exists([])?;
+    if !has_unreachable {
+        conn.execute_batch("ALTER TABLE probes ADD COLUMN unreachable_from TEXT")?;
+    }
     Ok(())
 }
 
@@ -241,9 +249,12 @@ impl SessionFile {
         )?;
         let sample_id = tx.last_insert_rowid();
         {
-            let mut stmt = tx.prepare_cached("INSERT INTO probes (sample_id, hop, address, rtt_us) VALUES (?1, ?2, ?3, ?4)")?;
+            let mut stmt = tx.prepare_cached(
+                "INSERT INTO probes (sample_id, hop, address, rtt_us, unreachable_from) VALUES (?1, ?2, ?3, ?4, ?5)",
+            )?;
             for h in &sample.hops {
-                stmt.execute(params![sample_id, h.hop, h.address.map(|a| a.to_string()), h.rtt_us])?;
+                let unreachable = h.unreachable_from.map(|a| a.to_string());
+                stmt.execute(params![sample_id, h.hop, h.address.map(|a| a.to_string()), h.rtt_us, unreachable])?;
             }
         }
         tx.commit()?;
@@ -279,7 +290,7 @@ impl SessionFile {
     /// Samples with `from <= ts <= to`, oldest first, hops in order.
     pub fn samples(&self, from: Millis, to: Millis) -> Result<Vec<Sample>> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT s.id, s.ts, s.interval_ms, s.target_known, p.hop, p.address, p.rtt_us
+            "SELECT s.id, s.ts, s.interval_ms, s.target_known, p.hop, p.address, p.rtt_us, p.unreachable_from
              FROM samples s JOIN probes p ON p.sample_id = s.id
              WHERE s.ts BETWEEN ?1 AND ?2 ORDER BY s.ts, s.id, p.hop",
         )?;
@@ -293,10 +304,12 @@ impl SessionFile {
                 last_id = Some(id);
             }
             let address: Option<String> = r.get(5)?;
+            let unreachable: Option<String> = r.get(7)?;
             out.last_mut().unwrap().hops.push(HopResult {
                 hop: r.get(4)?,
                 address: address.and_then(|a| a.parse().ok()),
                 rtt_us: r.get(6)?,
+                unreachable_from: unreachable.and_then(|a| a.parse().ok()),
             });
         }
         Ok(out)
@@ -353,6 +366,7 @@ mod tests {
                     hop: i as u8 + 1,
                     address: rtt.map(|_| IpAddr::from([10, 0, 0, i as u8 + 1])),
                     rtt_us: *rtt,
+                    unreachable_from: None,
                 })
                 .collect(),
         }
@@ -445,5 +459,28 @@ mod tests {
         assert_eq!(file.sample_times(0, 10).unwrap(), vec![(5, 2500)]);
         let known: bool = file.conn().query_row("SELECT target_known FROM samples", [], |r| r.get(0)).unwrap();
         assert!(known);
+    }
+
+    #[test]
+    fn old_files_get_the_unreachable_column() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let mut file = store.create("a", "1.1.1.1".parse().unwrap(), 2500, 3000).unwrap();
+        file.append(&sample(5, &[Some(500), None])).unwrap();
+        let id = file.id().to_string();
+        // Simulate a file from v0.1.0-beta.6, before the column existed.
+        file.conn()
+            .execute_batch(
+                "CREATE TABLE p2 (sample_id INTEGER NOT NULL, hop INTEGER NOT NULL, address TEXT, rtt_us INTEGER, PRIMARY KEY (sample_id, hop)) WITHOUT ROWID;
+                 INSERT INTO p2 SELECT sample_id, hop, address, rtt_us FROM probes; DROP TABLE probes; ALTER TABLE p2 RENAME TO probes;",
+            )
+            .unwrap();
+        drop(file);
+        let mut file = store.session(&id).unwrap();
+        assert_eq!(file.samples(0, 10).unwrap(), vec![sample(5, &[Some(500), None])]);
+        let mut s = sample(6, &[Some(500), None]);
+        s.hops[1].unreachable_from = Some("192.168.1.1".parse().unwrap());
+        file.append(&s).unwrap();
+        assert_eq!(file.samples(6, 6).unwrap(), vec![s]);
     }
 }

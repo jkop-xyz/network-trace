@@ -5,7 +5,9 @@
 //! - loss starting at hop 4 and carrying through to the Target for 15 minutes,
 //! - hop 2 rate-limiting its replies (loss that does *not* carry through),
 //! - a 20-minute Gap (machine asleep),
-//! - a Route Change at hop 3 halfway through.
+//! - a Route Change at hop 3 halfway through,
+//! - two 30-second Outages: one where the home router reports it has no route
+//!   onward ("destination unreachable"), one where everything goes silent.
 
 use std::net::IpAddr;
 use trace_core::model::{HopResult, Sample, now_ms};
@@ -42,22 +44,28 @@ fn main() -> anyhow::Result<()> {
 
     let outage = (start + 120 * 60_000, start + 135 * 60_000);
     let gap = (start + 40 * 60_000, start + 60 * 60_000);
+    let no_route = (start + 150 * 60_000, start + 150 * 60_000 + 30_000);
+    let silent = (start + 165 * 60_000, start + 165 * 60_000 + 30_000);
     let mut t = start;
     let mut sample_id = 0u64;
     let tx_batch = 2000;
     while t < end {
         if !(gap.0..gap.1).contains(&t) {
             let in_outage = (outage.0..outage.1).contains(&t);
+            let router_no_route = (no_route.0..no_route.1).contains(&t);
+            let all_silent = (silent.0..silent.1).contains(&t);
             let hops = (1..=6u8)
                 .map(|hop| {
                     let i = hop as usize - 1;
-                    let lost = (hop == 2 && rand() < 0.12) || (hop >= 4 && in_outage && rand() < 0.35) || rand() < 0.002;
+                    let cut = all_silent || (router_no_route && hop > 1);
+                    let lost = cut || (hop == 2 && rand() < 0.12) || (hop >= 4 && in_outage && rand() < 0.35) || rand() < 0.002;
                     let congestion = if hop >= 4 && in_outage { 25.0 + rand() * 40.0 } else { 0.0 };
                     let rtt = base_ms[i] + rand() * 1.5 + congestion;
                     HopResult {
                         hop,
                         address: (!lost).then(|| hop_addr(hop, t)),
                         rtt_us: (!lost).then(|| (rtt * 1000.0) as u32),
+                        unreachable_from: (router_no_route && hop > 1).then(|| hop_addr(1, t)),
                     }
                 })
                 .collect();
@@ -69,7 +77,7 @@ fn main() -> anyhow::Result<()> {
         }
         t += interval;
     }
-    file.set_note("Synthetic data: loss at hop 4 onwards for 15 minutes, a 20 minute gap, and a route change at hop 3.")?;
+    file.set_note("Synthetic data: loss at hop 4 onwards for 15 minutes, a 20 minute gap, a route change at hop 3, and two 30 second outages.")?;
     file.stop_at(end)?;
     eprintln!("\nwrote {} samples to session {}", sample_id, file.id());
     Ok(())

@@ -80,6 +80,21 @@ export interface RouteChange {
   changes: { hop: number; from: string | null; to: string | null }[];
 }
 
+/** Samples in a row in which the Target didn't answer. */
+export interface Outage {
+  start: Millis;
+  /** First Sample answered again, or the last unanswered one if not `recovered`. */
+  end: Millis;
+  recovered: boolean;
+  samples: number;
+  /** Furthest Hop that kept answering, if any. */
+  lastHop: number | null;
+  lastAddress: string | null;
+  /** A router that answered "destination unreachable": it had no route onward. */
+  unreachableFrom: string | null;
+  unreachableHop: number | null;
+}
+
 export interface SessionView {
   meta: SessionMeta;
   running: boolean;
@@ -90,6 +105,7 @@ export interface SessionView {
   target: TargetStats | null;
   gaps: Gap[];
   routeChanges: RouteChange[];
+  outages: Outage[];
   names: Record<string, string>;
 }
 
