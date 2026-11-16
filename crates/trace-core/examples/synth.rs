@@ -65,7 +65,7 @@ fn main() -> anyhow::Result<()> {
                         hop,
                         address: (!lost).then(|| hop_addr(hop, t)),
                         rtt_us: (!lost).then(|| (rtt * 1000.0) as u32),
-                        unreachable_from: (router_no_route && hop > 1).then(|| hop_addr(1, t)),
+                        unreachable_from: (router_no_route && hop > 1).then_some(hop_addr(1, t)),
                     }
                 })
                 .collect();
